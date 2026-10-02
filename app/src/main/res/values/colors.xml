@@ -1,0 +1,14 @@
+<resources>
+    <color name="primary_royal_blue">#1E40AF</color>
+    <color name="primary_electric_blue">#2563EB</color>
+    <color name="background_soft_ice">#F0F4F9</color>
+    <color name="surface_white">#FFFFFF</color>
+    <color name="navy_primary">#0D1B2A</color>
+    <color name="navy_secondary">#475569</color>
+    <color name="navy_muted">#64748B</color>
+    <color name="ice_accent">#EFF4FF</color>
+    <color name="ice_accent_border">#DBEAFE</color>
+    <color name="amber_warning">#D97706</color>
+    <color name="emerald_verified">#059669</color>
+    <color name="rose_destructive">#E11D48</color>
+</resources>
