@@ -145,56 +145,72 @@ fun ShareCheckModal(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
 
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items.forEach { item ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(if (item.isScrubbed) Color(0xFFF0FDF4) else Color(0xFFFEF3C7))
-                                .border(
-                                    0.5.dp,
-                                    if (item.isScrubbed) Color(0xFFBBF7D0) else Color(0xFFFDE68A),
-                                    RoundedCornerShape(10.dp)
-                                )
-                                .padding(10.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                if (items.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFFF0FDF4))
+                            .padding(10.dp)
+                    ) {
+                        Text(
+                            text = "Clean Header: Zero GPS coordinates or telemetry tags detected in this media.",
+                            fontSize = 11.sp,
+                            color = EmeraldVerified
+                        )
+                    }
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items.forEach { item ->
                             Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (item.isScrubbed) Color(0xFFF0FDF4) else Color(0xFFFEF3C7))
+                                    .border(
+                                        0.5.dp,
+                                        if (item.isScrubbed) Color(0xFFBBF7D0) else Color(0xFFFDE68A),
+                                        RoundedCornerShape(10.dp)
+                                    )
+                                    .padding(10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = if (item.isScrubbed) Icons.Outlined.Check else Icons.Outlined.WarningAmber,
-                                    contentDescription = null,
-                                    tint = if (item.isScrubbed) EmeraldVerified else AmberWarning,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column {
-                                    Text(
-                                        text = if (item.isScrubbed) "${item.type.label} [REDACTED]" else item.type.label,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (item.isScrubbed) EmeraldVerified else Color(0xFF92400E)
-                                    )
-                                    Text(
-                                        text = if (item.isScrubbed) "Stripped from binary payload" else item.detectedValue,
-                                        fontSize = 10.sp,
-                                        color = if (item.isScrubbed) Color(0xFF166534) else Color(0xFF78350F)
-                                    )
-                                }
-                            }
-
-                            if (!item.isScrubbed) {
-                                OutlinedButton(
-                                    onClick = { onScrubItem(item.id) },
-                                    shape = RoundedCornerShape(6.dp),
-                                    modifier = Modifier.height(28.dp),
-                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
                                 ) {
-                                    Text("Scrub", fontSize = 11.sp, color = RoyalBluePrimary)
+                                    Icon(
+                                        imageVector = if (item.isScrubbed) Icons.Outlined.Check else Icons.Outlined.WarningAmber,
+                                        contentDescription = null,
+                                        tint = if (item.isScrubbed) EmeraldVerified else AmberWarning,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column {
+                                        Text(
+                                            text = if (item.isScrubbed) "${item.type.label} [REDACTED]" else item.type.label,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (item.isScrubbed) EmeraldVerified else Color(0xFF92400E)
+                                        )
+                                        Text(
+                                            text = if (item.isScrubbed) "Stripped from binary payload" else item.detectedValue,
+                                            fontSize = 10.sp,
+                                            color = if (item.isScrubbed) Color(0xFF166534) else Color(0xFF78350F)
+                                        )
+                                    }
+                                }
+
+                                if (!item.isScrubbed) {
+                                    OutlinedButton(
+                                        onClick = { onScrubItem(item.id) },
+                                        shape = RoundedCornerShape(6.dp),
+                                        modifier = Modifier.height(28.dp),
+                                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                                    ) {
+                                        Text("Scrub", fontSize = 11.sp, color = RoyalBluePrimary)
+                                    }
                                 }
                             }
                         }

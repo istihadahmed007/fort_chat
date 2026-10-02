@@ -1,5 +1,7 @@
 package com.fort.messenger.ui.modals
 
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -41,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -48,19 +51,20 @@ import androidx.compose.ui.unit.sp
 import com.fort.messenger.model.CardType
 import com.fort.messenger.model.ContactPass
 import com.fort.messenger.model.PassDurationType
-import com.fort.messenger.ui.components.ConnectionCardBadge
 import com.fort.messenger.ui.theme.RoyalBluePrimary
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ContactPassGeneratorSheet(
     onDismissRequest: () -> Unit,
-    onGeneratePass: (CardType, PassDurationType) -> ContactPass,
+    onGeneratePass: (CardType, PassDurationType) -> ContactPass?,
+    generatedQrBitmap: Bitmap? = null,
+    activePass: ContactPass? = null,
     sheetState: SheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 ) {
     var selectedCardType by remember { mutableStateOf(CardType.PERSONAL) }
     var selectedDuration by remember { mutableStateOf(PassDurationType.SEVEN_DAYS) }
-    var generatedPass by remember { mutableStateOf<ContactPass?>(null) }
+    var localPass by remember { mutableStateOf<ContactPass?>(activePass) }
 
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
@@ -88,7 +92,7 @@ fun ContactPassGeneratorSheet(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "Bounded, zero-correlation invitation token",
+                        text = "Cryptographically bounded scannable QR invitation",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -119,7 +123,7 @@ fun ContactPassGeneratorSheet(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                CardType.values().forEach { cardType ->
+                CardType.entries.forEach { cardType ->
                     val isSelected = cardType == selectedCardType
                     val bgColor = if (isSelected) Color(0xFFEFF6FF) else Color(0xFFF8FAFC)
                     val borderColor = if (isSelected) RoyalBluePrimary else Color(0xFFE2E8F0)
@@ -157,7 +161,7 @@ fun ContactPassGeneratorSheet(
             Spacer(modifier = Modifier.height(8.dp))
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                PassDurationType.values().forEach { duration ->
+                PassDurationType.entries.forEach { duration ->
                     val isSelected = duration == selectedDuration
                     val bgColor = if (isSelected) Color(0xFFEFF6FF) else Color(0xFFF8FAFC)
                     val borderColor = if (isSelected) RoyalBluePrimary else Color(0xFFE2E8F0)
@@ -204,51 +208,57 @@ fun ContactPassGeneratorSheet(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // QR Code & Token Card
+            // Real ZXing Generated QR Code & Token Card
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(14.dp))
                     .background(Color(0xFFF8FAFC))
                     .border(0.5.dp, Color(0xFFE2E8F0), RoundedCornerShape(14.dp))
-                .padding(16.dp),
+                    .padding(16.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    // Stylized QR code representation
                     Box(
                         modifier = Modifier
-                            .size(140.dp)
+                            .size(160.dp)
                             .clip(RoundedCornerShape(12.dp))
                             .background(Color.White)
                             .border(1.dp, Color(0xFFCBD5E1), RoundedCornerShape(12.dp))
-                            .padding(10.dp),
+                            .padding(8.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.QrCode,
-                                contentDescription = "QR Code",
-                                tint = Color(0xFF0D1B2A),
-                                modifier = Modifier.size(90.dp)
+                        if (generatedQrBitmap != null) {
+                            Image(
+                                bitmap = generatedQrBitmap.asImageBitmap(),
+                                contentDescription = "Scannable Contact Pass QR Code",
+                                modifier = Modifier.size(144.dp)
                             )
-                            Text(
-                                text = "FORT SOVEREIGN TOKEN",
-                                fontSize = 7.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.5.sp,
-                                color = Color(0xFF64748B)
-                            )
+                        } else {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.QrCode,
+                                    contentDescription = "QR Code Placeholder",
+                                    tint = Color(0xFF0D1B2A),
+                                    modifier = Modifier.size(90.dp)
+                                )
+                                Text(
+                                    text = "TAP 'GENERATE PASS' TO ENCODE",
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF64748B)
+                                )
+                            }
                         }
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
 
                     Text(
-                        text = generatedPass?.token ?: "PASS-7D-88F4-UNCLAIMED",
+                        text = localPass?.token ?: activePass?.token ?: "Select duration & generate",
                         fontSize = 13.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
@@ -258,7 +268,7 @@ fun ContactPassGeneratorSheet(
                     Spacer(modifier = Modifier.height(4.dp))
 
                     Text(
-                        text = "Encrypted Single-Use Pass Token",
+                        text = "Encrypted Scannable QR Matrix (ZXing Verified)",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -293,7 +303,7 @@ fun ContactPassGeneratorSheet(
                 Button(
                     onClick = {
                         val pass = onGeneratePass(selectedCardType, selectedDuration)
-                        generatedPass = pass
+                        localPass = pass
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
                     shape = RoundedCornerShape(10.dp),
@@ -305,7 +315,7 @@ fun ContactPassGeneratorSheet(
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Create Pass", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Generate Pass", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 }
 
                 OutlinedButton(
@@ -319,7 +329,7 @@ fun ContactPassGeneratorSheet(
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Share Sheet", fontSize = 13.sp)
+                    Text("Close", fontSize = 13.sp)
                 }
             }
 

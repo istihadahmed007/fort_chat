@@ -102,7 +102,7 @@ fun ConversationScreen(
                 ) {
                     IconButton(onClick = onNavigateBack) {
                         Icon(
-                            imageVector = Icons.Default.ArrowBack,
+                            imageVector = Icons.Filled.ArrowBack,
                             contentDescription = "Back",
                             tint = MaterialTheme.colorScheme.onSurface
                         )
@@ -330,6 +330,8 @@ fun ConversationScreen(
     if (uiState.isPrivacyCheckOpen) {
         PrivacyCheckDialog(
             conversation = conversation,
+            peerConnection = uiState.currentPeerConnection,
+            onVerifySafetyNumber = { viewModel.markPeerSafetyNumberVerified() },
             onDismissRequest = { viewModel.closePrivacyCheck() },
             activeExpirySetting = uiState.activeChatExpirySetting
         )

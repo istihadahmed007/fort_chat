@@ -143,7 +143,9 @@ fun FortNavGraph(
             onDismissRequest = { viewModel.closePassGenerator() },
             onGeneratePass = { cardType, duration ->
                 viewModel.generateNewPass(cardType, duration)
-            }
+            },
+            generatedQrBitmap = uiState.generatedPassQrBitmap,
+            activePass = uiState.activeGeneratedPass
         )
     }
 }

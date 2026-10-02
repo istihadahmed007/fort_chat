@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,17 +24,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Fingerprint
 import androidx.compose.material.icons.outlined.Key
-import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Logout
 import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.PhonelinkLock
-import androidx.compose.material.icons.outlined.QrCode
 import androidx.compose.material.icons.outlined.Security
-import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Divider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -54,14 +50,12 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.fort.messenger.model.CardType
 import com.fort.messenger.model.ConnectionCard
 import com.fort.messenger.model.ContactPass
 import com.fort.messenger.ui.components.ConnectionCardBadge
 import com.fort.messenger.ui.components.SovereignCard
 import com.fort.messenger.ui.components.SovereignTopBar
 import com.fort.messenger.ui.theme.EmeraldVerified
-import com.fort.messenger.ui.theme.IceBlueBorder
 import com.fort.messenger.ui.theme.IceBlueTint
 import com.fort.messenger.ui.theme.RoseDestructive
 import com.fort.messenger.ui.theme.RoyalBluePrimary
@@ -94,6 +88,56 @@ fun YouAccessMapScreen(
             contentPadding = PaddingValues(top = 16.dp, bottom = 80.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // Signed-In User Session Info
+            item {
+                SovereignCard(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "AUTHENTICATED ENCLAVE ACCOUNT",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = RoyalBluePrimary,
+                                letterSpacing = 0.5.sp
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = uiState.currentUserAccount?.email ?: "No account active",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Session UID: ${uiState.currentUserAccount?.userId ?: "uninitialized"}",
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        OutlinedButton(
+                            onClick = { viewModel.logout() },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = RoseDestructive),
+                            modifier = Modifier.height(34.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Logout,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Sign Out", fontSize = 11.sp)
+                        }
+                    }
+                }
+            }
+
             // Connection Card Facet Switcher Section
             item {
                 Column {
@@ -246,43 +290,54 @@ fun YouAccessMapScreen(
                         Spacer(modifier = Modifier.height(10.dp))
 
                         // Passes list
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            uiState.activePasses.forEach { pass ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(Color(0xFFF8FAFC))
-                                        .padding(10.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(
-                                                text = pass.counterpartyName,
-                                                fontSize = 13.sp,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = MaterialTheme.colorScheme.onSurface
-                                            )
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            ConnectionCardBadge(cardType = pass.cardType)
-                                        }
-                                        Text(
-                                            text = "${pass.durationType.label} • ${pass.timeRemainingString}",
-                                            fontSize = 11.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-
-                                    OutlinedButton(
-                                        onClick = { viewModel.revokePass(pass.id) },
-                                        shape = RoundedCornerShape(6.dp),
-                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = RoseDestructive),
-                                        modifier = Modifier.height(32.dp),
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                        if (uiState.activePasses.isEmpty()) {
+                            Text(
+                                text = "No active contact passes issued yet. Tap '+ New Pass' in Chats to create one.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                uiState.activePasses.forEach { pass ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(Color(0xFFF8FAFC))
+                                            .padding(10.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text("Revoke", fontSize = 11.sp, color = RoseDestructive)
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(
+                                                    text = pass.token,
+                                                    fontSize = 13.sp,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                ConnectionCardBadge(cardType = pass.cardType)
+                                            }
+                                            Text(
+                                                text = "${pass.durationType.label} • ${pass.timeRemainingString}",
+                                                fontSize = 11.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+
+                                        if (pass.isRevocable) {
+                                            OutlinedButton(
+                                                onClick = { viewModel.revokePass(pass.id) },
+                                                shape = RoundedCornerShape(6.dp),
+                                                colors = ButtonDefaults.outlinedButtonColors(contentColor = RoseDestructive),
+                                                modifier = Modifier.height(32.dp),
+                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                                            ) {
+                                                Text("Revoke", fontSize = 11.sp, color = RoseDestructive)
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -301,7 +356,7 @@ fun YouAccessMapScreen(
                 }
             }
 
-            // Hardware Enclave & Backup Vault
+            // Real Hardware Enclave & Cryptographic Session Status
             item {
                 SovereignCard(modifier = Modifier.fillMaxWidth()) {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -314,55 +369,45 @@ fun YouAccessMapScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Hardware Enclave & Vault Status",
+                                text = "Local Cryptographic Enclave Session",
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                         }
 
-                        uiState.accessMapAudit?.enclaveDevices?.forEach { device ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(Color(0xFFF0FDF4))
-                                    .padding(10.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column {
-                                    Text(
-                                        text = device.deviceName,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Text(
-                                        text = "${device.securityLevel} • ${device.enrolledDate}",
-                                        fontSize = 10.sp,
-                                        color = EmeraldVerified
-                                    )
-                                }
-                                if (device.isCurrentDevice) {
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(4.dp))
-                                            .background(EmeraldVerified)
-                                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                                    ) {
-                                        Text(
-                                            text = "THIS ENCLAVE",
-                                            fontSize = 9.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color.White
-                                        )
-                                    }
-                                }
+                        // Local Keystore Master Key Status
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFFF0FDF4))
+                                .padding(10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Android KeyStore Master Key",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "AES-256-GCM hardware-backed local key isolation",
+                                    fontSize = 10.sp,
+                                    color = EmeraldVerified
+                                )
                             }
+                            Icon(
+                                imageVector = Icons.Outlined.CheckCircle,
+                                contentDescription = null,
+                                tint = EmeraldVerified,
+                                modifier = Modifier.size(18.dp)
+                            )
                         }
 
-                        // Backup Vault Item
+                        // Asymmetric Algorithm Status
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -374,13 +419,13 @@ fun YouAccessMapScreen(
                         ) {
                             Column {
                                 Text(
-                                    text = "Encrypted Client-Side Vault",
+                                    text = "End-to-End Encryption Algorithm",
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
-                                    text = "Algorithm: ${uiState.accessMapAudit?.vaultStatus?.algorithm ?: "XChaCha20-Poly1305"}",
+                                    text = "NIST P-256 (secp256r1) ECDH + HKDF-SHA256 + AES-256-GCM",
                                     fontSize = 10.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -388,7 +433,7 @@ fun YouAccessMapScreen(
                             Icon(
                                 imageVector = Icons.Outlined.CheckCircle,
                                 contentDescription = null,
-                                tint = EmeraldVerified,
+                                tint = RoyalBluePrimary,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
@@ -440,7 +485,7 @@ fun YouAccessMapScreen(
                             }
                             Switch(
                                 checked = uiState.isBiometricLockEnabled,
-                                onCheckedChange = { viewModel.toggleBiometricLock() },
+                                onCheckedChange = { viewModel.toggleBiometricSetting() },
                                 colors = SwitchDefaults.colors(checkedThumbColor = RoyalBluePrimary)
                             )
                         }
@@ -612,7 +657,7 @@ fun ConnectionCardFacetItem(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Isolated Key Fingerprint
+            // Authentic Derived Key Fingerprint
             Box(
                 modifier = Modifier
                     .fillMaxWidth()

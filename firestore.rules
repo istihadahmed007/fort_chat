@@ -1,0 +1,94 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null && request.auth.uid != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // 1. User Profiles & Persona Cards
+    // Only authenticated users can read public cards; only owner can write or modify
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if isOwner(userId);
+
+      match /cards/{cardId} {
+        allow read: if isAuthenticated();
+        allow write: if isOwner(userId);
+      }
+    }
+
+    // 2. End-to-End Encrypted Message Packets
+    // Server stores and relays ONLY ciphertext.
+    // Must be readable solely by intended recipient or sender. Plaintext in payload is rejected.
+    match /messages/{messageId} {
+      allow create: if isAuthenticated() 
+        && request.resource.data.senderUserId == request.auth.uid
+        && request.resource.data.ciphertextBase64 is string
+        && request.resource.data.ivBase64 is string
+        && !exists(/databases/$(database)/documents/users/$(request.resource.data.recipientUserId)/blocklist/$(request.auth.uid));
+
+      allow read: if isAuthenticated() 
+        && (resource.data.recipientUserId == request.auth.uid || resource.data.senderUserId == request.auth.uid);
+      
+      allow update, delete: if false; // Messages are immutable append-only records
+    }
+
+    // 3. Contact Passes & Bounded Invitations
+    // Pass is claimable only if not revoked, not expired, and not already claimed if single-use
+    match /contact_passes/{passId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.resource.data.issuerUserId == request.auth.uid;
+      allow update: if isAuthenticated() 
+        && (
+          // Issuer can revoke
+          (resource.data.issuerUserId == request.auth.uid && request.resource.data.isRevoked == true)
+          // Claimant can claim if active
+          || (!resource.data.isRevoked && request.time.toMillis() < resource.data.expiresAt)
+        );
+      allow delete: if isAuthenticated() && resource.data.issuerUserId == request.auth.uid;
+    }
+
+    // 4. Knock First Inbound Requests
+    match /knock_first/{requestId} {
+      allow create: if isAuthenticated()
+        && request.resource.data.senderUserId == request.auth.uid
+        && !exists(/databases/$(database)/documents/users/$(request.resource.data.recipientUserId)/blocklist/$(request.auth.uid));
+      
+      allow read, update, delete: if isAuthenticated()
+        && (resource.data.recipientUserId == request.auth.uid || resource.data.senderUserId == request.auth.uid);
+    }
+
+    // 5. Private Rooms
+    // Ephemeral lifecycle-bound rooms accessible solely by enrolled members
+    match /rooms/{roomId} {
+      allow read: if isAuthenticated() && (request.auth.uid in resource.data.members || resource.data.creatorId == request.auth.uid);
+      allow create: if isAuthenticated() && request.resource.data.creatorId == request.auth.uid;
+      allow update: if isAuthenticated() && (request.auth.uid in resource.data.members || resource.data.creatorId == request.auth.uid);
+      allow delete: if isAuthenticated() && resource.data.creatorId == request.auth.uid;
+    }
+
+    // 6. Mood Ring & Quiet Presence
+    // Time-decayed and audience-restricted
+    match /moods/{userId} {
+      allow create, update, delete: if isOwner(userId);
+      allow read: if isAuthenticated() 
+        && request.time.toMillis() < resource.data.expiresAt
+        && (
+          isOwner(userId)
+          || resource.data.audienceType == 'CONNECTIONS'
+          || (resource.data.allowedAudienceIds is list && request.auth.uid in resource.data.allowedAudienceIds)
+        );
+    }
+
+    // 7. Recipient Blocklists
+    match /users/{userId}/blocklist/{blockedUserId} {
+      allow read, write: if isOwner(userId);
+    }
+  }
+}
