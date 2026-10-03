@@ -11,8 +11,12 @@ data class UserAccountEntity(
     val email: String,
     val authToken: String,
     val activeCardId: String,
+    val displayName: String = "",
+    val phoneNumber: String? = null,
     val biometricEnabled: Boolean = false,
     val redactNotifications: Boolean = true,
+    val showOnlinePresence: Boolean = true,
+    val showTypingIndicator: Boolean = true,
     val createdAt: Long = System.currentTimeMillis()
 )
 
@@ -27,7 +31,7 @@ data class PersonaCardEntity(
     val avatarUri: String? = null,
     val avatarEmoji: String = "🛡️",
     val publicKey: String,
-    val privateKeyEncrypted: String,
+    val privateKeyEncrypted: String, // Keystore-encrypted at rest
     val businessHoursOnly: Boolean = false,
     val moodSharingEnabled: Boolean = true
 )
@@ -47,7 +51,9 @@ data class PeerConnectionEntity(
     val keyChangeDetected: Boolean = false,
     val passType: PassDurationType,
     val passExpiresAt: Long,
-    val status: String = "ACTIVE" // ACTIVE, BLOCKED, EXPIRED
+    val status: String = "ACTIVE", // ACTIVE, BLOCKED, EXPIRED
+    val isTyping: Boolean = false,
+    val lastSeenTimestamp: Long = 0L
 )
 
 @Entity(tableName = "knock_first_requests")
@@ -75,7 +81,8 @@ data class ContactPassEntity(
     val expiresAt: Long,
     val isSingleUse: Boolean = false,
     val isClaimed: Boolean = false,
-    val isRevoked: Boolean = false
+    val isRevoked: Boolean = false,
+    val claimantUserId: String? = null
 )
 
 @Entity(tableName = "private_rooms")
@@ -86,6 +93,7 @@ data class PrivateRoomEntity(
     val iconEmoji: String,
     val creatorId: String,
     val membersJson: String,
+    val adminIdsJson: String = "[]",
     val tasksJson: String,
     val createdAt: Long = System.currentTimeMillis(),
     val expiresAt: Long,
@@ -101,11 +109,23 @@ data class ChatMessageEntity(
     val ciphertext: String,
     val iv: String,
     val ephemeralKey: String,
-    val decryptedTextCache: String, // Decrypted on-device only
+    val senderSignature: String = "",
+    val encryptedLocalPayload: String = "", // Protected locally via KeyStoreMaster AES-256-GCM
+    val decryptedTextCache: String = "", // Maintained for legacy compatibility; plaintext never stored unencrypted
     val timestamp: Long,
     val isMine: Boolean,
     val isScrubbedMedia: Boolean = false,
-    val deliveryStatus: String = "DELIVERED" // PENDING, SENT, DELIVERED, FAILED
+    val deliveryStatus: String = "DELIVERED", // PENDING, SENT, DELIVERED, READ, FAILED
+    val replyToMessageId: String? = null,
+    val replyToSenderName: String? = null,
+    val replyToText: String? = null,
+    val reactionsJson: String = "{}", // Map: emoji -> list of userIds
+    val isEdited: Boolean = false,
+    val isDeleted: Boolean = false,
+    val attachmentUri: String? = null,
+    val attachmentType: String? = null, // "IMAGE", "FILE"
+    val attachmentName: String? = null,
+    val attachmentSize: Long = 0L
 )
 
 @Entity(tableName = "mood_rings")

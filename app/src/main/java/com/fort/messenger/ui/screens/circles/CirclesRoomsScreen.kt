@@ -52,11 +52,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fort.messenger.model.PrivateRoom
 import com.fort.messenger.model.SharingCircle
+import androidx.compose.material3.*
+import androidx.compose.material.icons.outlined.ExitToApp
+import androidx.compose.material.icons.outlined.PersonAdd
 import com.fort.messenger.ui.components.ConnectionCardBadge
 import com.fort.messenger.ui.components.SovereignCard
 import com.fort.messenger.ui.components.SovereignTopBar
 import com.fort.messenger.ui.theme.AmberWarning
 import com.fort.messenger.ui.theme.EmeraldVerified
+import com.fort.messenger.ui.theme.RoseDestructive
 import com.fort.messenger.ui.theme.RoyalBluePrimary
 import com.fort.messenger.viewmodel.AppLanguage
 import com.fort.messenger.viewmodel.FortMainViewModel
@@ -125,6 +129,12 @@ fun CirclesRoomsScreen(
                         language = uiState.currentLanguage,
                         onToggleTask = { roomId, taskId ->
                             viewModel.toggleRoomTask(roomId, taskId)
+                        },
+                        onInviteMember = { roomId, inviteeId ->
+                            viewModel.inviteToRoom(roomId, inviteeId)
+                        },
+                        onLeaveRoom = { roomId ->
+                            viewModel.leaveRoom(roomId)
                         }
                     )
                 }
@@ -290,8 +300,13 @@ fun SharingCirclesTabContent(
 fun PrivateRoomsTabContent(
     rooms: List<PrivateRoom>,
     language: AppLanguage,
-    onToggleTask: (String, String) -> Unit
+    onToggleTask: (String, String) -> Unit,
+    onInviteMember: (String, String) -> Unit,
+    onLeaveRoom: (String) -> Unit
 ) {
+    var invitingRoomId by remember { mutableStateOf<String?>(null) }
+    var inviteeUserId by remember { mutableStateOf("") }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -355,6 +370,32 @@ fun PrivateRoomsTabContent(
                                     text = room.purpose,
                                     fontSize = 12.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        // Room Actions
+                        Row {
+                            IconButton(
+                                onClick = { invitingRoomId = room.id },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.PersonAdd,
+                                    contentDescription = "Invite Member",
+                                    tint = RoyalBluePrimary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            IconButton(
+                                onClick = { onLeaveRoom(room.id) },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.ExitToApp,
+                                    contentDescription = "Leave Room",
+                                    tint = RoseDestructive,
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
                         }
@@ -438,5 +479,49 @@ fun PrivateRoomsTabContent(
                 }
             }
         }
+    }
+
+    // Invite Member Dialog
+    if (invitingRoomId != null) {
+        AlertDialog(
+            onDismissRequest = { invitingRoomId = null },
+            title = { Text("Invite Member to Room") },
+            text = {
+                Column {
+                    Text(
+                        text = "Enter the peer user ID or contact pass token to grant bounded access to this private room.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = inviteeUserId,
+                        onValueChange = { inviteeUserId = it },
+                        label = { Text("User ID or Handle") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (inviteeUserId.isNotBlank()) {
+                            onInviteMember(invitingRoomId!!, inviteeUserId.trim())
+                            invitingRoomId = null
+                            inviteeUserId = ""
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary)
+                ) {
+                    Text("Send Invite")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { invitingRoomId = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }

@@ -376,4 +376,214 @@ class FortRealProductionTest {
         assertEquals(plaintext, messagesAfterRestart.first().decryptedTextCache)
         assertNotNull(messagesAfterRestart.first().ciphertext)
     }
+
+    @Test
+    fun testSenderAuthenticationAndTamperDetection() = runBlocking {
+        val aliceKey = FortCryptoManager.generateIdentityKeyPair()
+        val bobKey = FortCryptoManager.generateIdentityKeyPair()
+        val charlieKey = FortCryptoManager.generateIdentityKeyPair()
+
+        val plaintext = "Authenticated sovereign packet"
+        val payload = FortCryptoManager.encrypt(
+            plaintext = plaintext,
+            recipientPublicKeyBase64 = bobKey.publicKeyBase64,
+            senderKeyPair = aliceKey
+        )
+        assertNotNull(payload.senderSignatureBase64)
+        assertTrue(payload.senderSignatureBase64.isNotEmpty())
+
+        // 1. Bob verifies valid signature with Alice's public key -> succeeds
+        val decrypted = FortCryptoManager.decrypt(
+            payload = payload,
+            recipientPrivateKeyBase64 = bobKey.privateKeyBase64,
+            senderPublicKeyBase64 = aliceKey.publicKeyBase64
+        )
+        assertEquals(plaintext, decrypted)
+
+        // 2. Charlie tampers with the ciphertext -> fails closed
+        val tamperedPayload = payload.copy(ciphertextBase64 = payload.ciphertextBase64.reversed())
+        var failedOnTamper = false
+        try {
+            FortCryptoManager.decrypt(
+                payload = tamperedPayload,
+                recipientPrivateKeyBase64 = bobKey.privateKeyBase64,
+                senderPublicKeyBase64 = aliceKey.publicKeyBase64
+            )
+        } catch (e: Exception) {
+            failedOnTamper = true
+        }
+        assertTrue("Tampered ciphertext must be rejected by signature or GCM tag", failedOnTamper)
+
+        // 3. Forged sender public key (claiming Charlie sent it) -> signature verification fails closed
+        var failedOnForgedSender = false
+        try {
+            FortCryptoManager.decrypt(
+                payload = payload,
+                recipientPrivateKeyBase64 = bobKey.privateKeyBase64,
+                senderPublicKeyBase64 = charlieKey.publicKeyBase64
+            )
+        } catch (e: SecurityException) {
+            failedOnForgedSender = true
+        }
+        assertTrue("Message with mismatched sender key must fail closed with SecurityException", failedOnForgedSender)
+    }
+
+    @Test
+    fun testOfflineMessageQueueingAndRetryOutbox() = runBlocking {
+        val alice = repositoryAlice.register("alice_offline@fort.net", "Pass123!", "Alice").getOrThrow()
+        val bob = repositoryBob.register("bob_offline@fort.net", "Pass123!", "Bob").getOrThrow()
+
+        // Connect
+        val pass = repositoryAlice.generatePass(alice.userId, CardType.PERSONAL, PassDurationType.SEVEN_DAYS).getOrThrow()
+        repositoryBob.claimPass(pass.token, bob.userId, "Bob")
+
+        // Disconnect/block Alice on server relay to simulate network drop
+        serverRelay.blockUser(blockerUserId = bob.userId, blockedUserId = alice.userId)
+
+        // Alice sends message -> Transmission rejected on server, saved locally as PENDING
+        val sendResult = repositoryAlice.sendEncryptedMessage(
+            conversationId = "conv_${bob.userId}",
+            senderUserId = alice.userId,
+            recipientUserId = bob.userId,
+            plaintext = "Message during network outage"
+        )
+        assertTrue("Send during network drop returns failure", sendResult.isFailure)
+
+        val messages = repositoryAlice.getConversationMessages("conv_${bob.userId}").first()
+        assertEquals(1, messages.size)
+        assertEquals("PENDING", messages.first().deliveryStatus)
+
+        // Unblock to simulate network restoration
+        serverRelay.clearAllData()
+        serverRelay.register("alice_offline@fort.net", "Pass123!", "Alice")
+        serverRelay.register("bob_offline@fort.net", "Pass123!", "Bob")
+        val aliceCard = repositoryAlice.getPersonaCards(alice.userId).first().first()
+        val bobCard = repositoryBob.getPersonaCards(bob.userId).first().first()
+        serverRelay.publishPublicKey(alice.userId, CardType.PERSONAL.name, aliceCard.publicKey)
+        serverRelay.publishPublicKey(bob.userId, CardType.PERSONAL.name, bobCard.publicKey)
+
+        // Trigger outbox retry
+        val retriedCount = repositoryAlice.retryPendingOutbox()
+        assertEquals(1, retriedCount)
+
+        val messagesAfterRetry = repositoryAlice.getConversationMessages("conv_${bob.userId}").first()
+        assertEquals("SENT", messagesAfterRetry.first().deliveryStatus)
+    }
+
+    @Test
+    fun testRoomAdminControlsAndMembershipAuthorization() = runBlocking {
+        val alice = repositoryAlice.register("alice_admin@fort.net", "Pass123!", "Alice").getOrThrow()
+        val bob = repositoryBob.register("bob_member@fort.net", "Pass123!", "Bob").getOrThrow()
+        val charlieId = "usr_charlie_unauthorized"
+
+        // Alice creates private room (Alice is creator & admin)
+        val room = repositoryAlice.createRoom(
+            name = "Project Citadel",
+            purpose = "Secure Operations",
+            iconEmoji = "🏰",
+            creatorId = alice.userId,
+            durationDays = 7,
+            initialTasks = listOf("Verify Enclave" to "Alice")
+        ).getOrThrow()
+
+        // 1. Alice (admin) invites Bob -> succeeds
+        val inviteRes = repositoryAlice.inviteToRoom(room.roomId, alice.userId, bob.userId)
+        assertTrue("Creator can invite members", inviteRes.isSuccess)
+
+        // 2. Bob (member, non-admin) attempts to invite Charlie -> fails with SecurityException
+        val bobInviteCharlie = serverRelay.inviteToRoom(room.roomId, bob.userId, charlieId)
+        assertTrue(bobInviteCharlie.isFailure)
+        assertTrue(bobInviteCharlie.exceptionOrNull() is SecurityException)
+
+        // 3. Unauthorized user Charlie attempts to fetch room -> fails with SecurityException
+        val charlieFetch = serverRelay.fetchRoom(room.roomId, charlieId)
+        assertTrue(charlieFetch.isFailure)
+        assertTrue(charlieFetch.exceptionOrNull() is SecurityException)
+
+        // 4. Alice removes Bob -> succeeds
+        val removeRes = repositoryAlice.removeRoomMember(room.roomId, alice.userId, bob.userId)
+        assertTrue(removeRes.isSuccess)
+
+        // Now Bob is no longer a member -> cannot fetch room
+        val bobFetchAfterRemoval = serverRelay.fetchRoom(room.roomId, bob.userId)
+        assertTrue(bobFetchAfterRemoval.isFailure)
+    }
+
+    @Test
+    fun testAtomicSingleUsePassClaimConcurrently() = runBlocking {
+        val alice = repositoryAlice.register("alice_atomic@fort.net", "Pass123!", "Alice").getOrThrow()
+        val bob = repositoryBob.register("bob_atomic@fort.net", "Pass123!", "Bob").getOrThrow()
+        val charlie = repositoryAlice.register("charlie_atomic@fort.net", "Pass123!", "Charlie").getOrThrow()
+
+        val pass = repositoryAlice.generatePass(
+            issuerUserId = alice.userId,
+            cardType = CardType.MARKETPLACE,
+            durationType = PassDurationType.ONE_CONVERSATION
+        ).getOrThrow()
+
+        val claim1 = repositoryBob.claimPass(pass.token, bob.userId, "Bob")
+        val claim2 = repositoryBob.claimPass(pass.token, charlie.userId, "Charlie")
+
+        val successCount = (if (claim1.isSuccess) 1 else 0) + (if (claim2.isSuccess) 1 else 0)
+        val failureCount = (if (claim1.isFailure) 1 else 0) + (if (claim2.isFailure) 1 else 0)
+
+        assertEquals("Exactly one claimant can claim a single-use pass", 1, successCount)
+        assertEquals("Subsequent claimant must be rejected", 1, failureCount)
+    }
+
+    @Test
+    fun testMessageReactionsEditAndDelete() = runBlocking {
+        val alice = repositoryAlice.register("alice_react@fort.net", "Pass123!", "Alice").getOrThrow()
+        val bob = repositoryBob.register("bob_react@fort.net", "Pass123!", "Bob").getOrThrow()
+
+        val pass = repositoryAlice.generatePass(alice.userId, CardType.PERSONAL, PassDurationType.SEVEN_DAYS).getOrThrow()
+        repositoryBob.claimPass(pass.token, bob.userId, "Bob")
+        repositoryAlice.claimPass(repositoryBob.generatePass(bob.userId, CardType.PERSONAL, PassDurationType.SEVEN_DAYS).getOrThrow().token, alice.userId, "Alice")
+
+        val sentMsg = repositoryAlice.sendEncryptedMessage(
+            conversationId = "conv_${bob.userId}",
+            senderUserId = alice.userId,
+            recipientUserId = bob.userId,
+            plaintext = "Initial message content"
+        ).getOrThrow()
+
+        // 1. Add reaction
+        repositoryAlice.addMessageReaction(sentMsg.messageId, alice.userId, "❤️")
+        var msg = repositoryAlice.getMessageById(sentMsg.messageId)
+        assertTrue(msg?.reactionsJson?.contains("❤️") == true)
+
+        // Toggle reaction off
+        repositoryAlice.addMessageReaction(sentMsg.messageId, alice.userId, "❤️")
+        msg = repositoryAlice.getMessageById(sentMsg.messageId)
+        assertFalse(msg?.reactionsJson?.contains("❤️") == true)
+
+        // 2. Edit message
+        repositoryAlice.editMessage(sentMsg.messageId, "Updated edited message")
+        msg = repositoryAlice.getMessageById(sentMsg.messageId)
+        assertTrue(msg?.isEdited == true)
+
+        // 3. Delete message
+        repositoryAlice.deleteMessage(sentMsg.messageId)
+        msg = repositoryAlice.getMessageById(sentMsg.messageId)
+        assertTrue(msg?.isDeleted == true)
+    }
+
+    @Test
+    fun testPhoneOtpAndGoogleAccountFlows() = runBlocking {
+        // 1. Phone OTP dispatch and verification
+        val phone = "+15550192834"
+        val otpSession = repositoryAlice.sendPhoneOtp(phone).getOrThrow()
+        assertTrue(otpSession.isNotEmpty())
+
+        val phoneUser = repositoryAlice.verifyPhoneOtp(otpSession, "739281", "Phone Sovereign").getOrThrow()
+        assertEquals(phone, phoneUser.phoneNumber)
+
+        // 2. Google sign-in
+        val googleUser = repositoryAlice.loginWithGoogle("GOOGLE_TOKEN_12345", "Google Peer").getOrThrow()
+        assertTrue(googleUser.email.contains("google_user_"))
+
+        // 3. Password reset
+        val resetResult = repositoryAlice.sendPasswordReset("user@fort.net")
+        assertTrue(resetResult.isSuccess)
+    }
 }

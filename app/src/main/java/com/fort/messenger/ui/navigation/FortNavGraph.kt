@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
@@ -37,6 +38,7 @@ import com.fort.messenger.ui.screens.circles.CirclesRoomsScreen
 import com.fort.messenger.ui.screens.requests.KnockFirstRequestsScreen
 import com.fort.messenger.ui.screens.you.YouAccessMapScreen
 import com.fort.messenger.ui.theme.RoyalBluePrimary
+import com.fort.messenger.ui.screens.auth.AuthScreen
 import com.fort.messenger.viewmodel.FortMainViewModel
 import kotlinx.coroutines.delay
 
@@ -48,6 +50,23 @@ fun FortNavGraph(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var currentDestination by remember { mutableStateOf(FortDestination.CHATS) }
+
+    // Splash loading state while inspecting Room DB session
+    if (uiState.isInitializing) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator(color = RoyalBluePrimary)
+        }
+        return
+    }
+
+    // Unauthenticated state -> Render real Onboarding & Auth Flow
+    if (uiState.currentUserAccount == null) {
+        AuthScreen(viewModel = viewModel, modifier = modifier)
+        return
+    }
 
     // If an individual conversation is open, render ConversationScreen
     if (uiState.currentOpenChatId != null) {

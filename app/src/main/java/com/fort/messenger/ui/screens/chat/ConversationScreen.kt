@@ -1,55 +1,27 @@
 package com.fort.messenger.ui.screens.chat
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.outlined.AttachFile
-import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material.icons.outlined.FavoriteBorder
-import androidx.compose.material.icons.outlined.Security
-import androidx.compose.material.icons.outlined.Shield
-import androidx.compose.material.icons.outlined.Timer
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.outlined.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fort.messenger.model.ChatMessage
@@ -61,6 +33,7 @@ import com.fort.messenger.ui.modals.ShareCheckModal
 import com.fort.messenger.ui.theme.EmeraldVerified
 import com.fort.messenger.ui.theme.IceBlueBorder
 import com.fort.messenger.ui.theme.IceBlueTint
+import com.fort.messenger.ui.theme.RoseDestructive
 import com.fort.messenger.ui.theme.RoyalBluePrimary
 import com.fort.messenger.viewmodel.FortMainViewModel
 
@@ -75,6 +48,12 @@ fun ConversationScreen(
     val uiState by viewModel.uiState.collectAsState()
     val conversation = uiState.conversations.find { it.id == conversationId }
     var inputText by remember { mutableStateOf("") }
+    var isSearchActive by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedMessageForActions by remember { mutableStateOf<ChatMessage?>(null) }
+    var showEditDialog by remember { mutableStateOf(false) }
+    var editingText by remember { mutableStateOf("") }
+    var showAttachmentMenu by remember { mutableStateOf(false) }
 
     if (conversation == null) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -83,10 +62,16 @@ fun ConversationScreen(
         return
     }
 
+    // Filter messages if search is active
+    val displayMessages = if (searchQuery.isNotBlank()) {
+        conversation.messages.filter { it.text.contains(searchQuery, ignoreCase = true) }
+    } else {
+        conversation.messages
+    }
+
     Scaffold(
         topBar = {
-            // Conversation Header
-            Box(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surface)
@@ -141,16 +126,28 @@ fun ConversationScreen(
                             ConnectionCardBadge(cardType = conversation.cardType)
                         }
                         Text(
-                            text = conversation.handle,
+                            text = if (conversation.isTyping || uiState.isPeerTyping) "typing..." else conversation.handle,
                             fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            fontWeight = if (conversation.isTyping || uiState.isPeerTyping) FontWeight.Bold else FontWeight.Normal,
+                            color = if (conversation.isTyping || uiState.isPeerTyping) RoyalBluePrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    // In-chat Search Toggle Button
+                    IconButton(onClick = {
+                        isSearchActive = !isSearchActive
+                        if (!isSearchActive) searchQuery = ""
+                    }) {
+                        Icon(
+                            imageVector = Icons.Outlined.Search,
+                            contentDescription = "Search Messages",
+                            tint = if (isSearchActive) RoyalBluePrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(22.dp)
                         )
                     }
 
                     // Privacy Check Button
-                    IconButton(
-                        onClick = { viewModel.openPrivacyCheck() }
-                    ) {
+                    IconButton(onClick = { viewModel.openPrivacyCheck() }) {
                         Icon(
                             imageVector = Icons.Outlined.Shield,
                             contentDescription = "Privacy Check",
@@ -159,32 +156,134 @@ fun ConversationScreen(
                         )
                     }
                 }
+
+                // In-Conversation Search Bar
+                AnimatedVisibility(visible = isSearchActive) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("Search encrypted messages...", fontSize = 12.sp) },
+                            singleLine = true,
+                            trailingIcon = {
+                                if (searchQuery.isNotEmpty()) {
+                                    IconButton(onClick = { searchQuery = "" }) {
+                                        Icon(Icons.Default.Close, contentDescription = "Clear", modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp)
+                        )
+                    }
+                }
             }
         },
         bottomBar = {
-            // Bottom Message Input with Media Scrubber trigger
-            Box(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surface)
                     .border(0.5.dp, MaterialTheme.colorScheme.outline)
                     .imePadding()
                     .navigationBarsPadding()
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
+                // Replying to Quote Preview Banner
+                AnimatedVisibility(visible = uiState.replyingToMessage != null) {
+                    val rep = uiState.replyingToMessage
+                    if (rep != null) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color(0xFFF1F5F9))
+                                .border(width = 0.5.dp, color = Color(0xFFCBD5E1))
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                Box(
+                                    modifier = Modifier
+                                        .width(3.dp)
+                                        .height(28.dp)
+                                        .background(RoyalBluePrimary, RoundedCornerShape(2.dp))
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = "Replying to ${rep.senderName}",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = RoyalBluePrimary
+                                    )
+                                    Text(
+                                        text = rep.text,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+
+                            IconButton(
+                                onClick = { viewModel.setReplyingTo(null) },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(Icons.Default.Close, contentDescription = "Cancel Reply", modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    }
+                }
+
+                // Message Input Row
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Attachment button -> Triggers Share Check (PRD Section 4.4)
+                    // Attachment button
                     IconButton(
-                        onClick = { viewModel.openShareCheck() },
+                        onClick = { showAttachmentMenu = true },
                         modifier = Modifier.size(40.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Outlined.AttachFile,
-                            contentDescription = "Attach Sanitized Media",
+                            contentDescription = "Attach Media or File",
                             tint = RoyalBluePrimary
+                        )
+                    }
+
+                    DropdownMenu(
+                        expanded = showAttachmentMenu,
+                        onDismissRequest = { showAttachmentMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Sanitized Camera Photo (EXIF Scrubbed)") },
+                            leadingIcon = { Icon(Icons.Outlined.PhotoCamera, contentDescription = null, tint = RoyalBluePrimary) },
+                            onClick = {
+                                showAttachmentMenu = false
+                                viewModel.openShareCheck()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Send File / Document") },
+                            leadingIcon = { Icon(Icons.Outlined.Description, contentDescription = null, tint = RoyalBluePrimary) },
+                            onClick = {
+                                showAttachmentMenu = false
+                                viewModel.sendMessage(
+                                    text = "📄 sovereign_enclave_manifest.pdf",
+                                    attachmentUri = "content://fort/manifest.pdf",
+                                    attachmentType = "FILE",
+                                    attachmentName = "sovereign_enclave_manifest.pdf",
+                                    attachmentSize = 48200L
+                                )
+                            }
                         )
                     }
 
@@ -266,14 +365,15 @@ fun ConversationScreen(
                     }
 
                     Text(
-                        text = "Encrypted Handshake",
+                        text = "Sender-Authenticated E2EE",
                         fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
                         color = Color(0xFF1E3A8A)
                     )
                 }
             }
 
-            // Quick Support Response Banner if peer has mood
+            // Quick Support Response Banner if peer has active mood
             if (conversation.moodEmoji != null) {
                 Box(
                     modifier = Modifier
@@ -292,7 +392,6 @@ fun ConversationScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
 
-                        // One-tap support response: "I'm here 🤍" (PRD Section 4.3)
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(12.dp))
@@ -311,22 +410,187 @@ fun ConversationScreen(
                 }
             }
 
+            // Outbox Retry Banner if any message is pending or failed
+            val hasPending = conversation.messages.any { it.deliveryStatus == "PENDING" || it.deliveryStatus == "FAILED" }
+            if (hasPending) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFFFEF3C7))
+                        .clickable { viewModel.retryPendingOutbox() }
+                        .padding(horizontal = 14.dp, vertical = 6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Outlined.CloudQueue, contentDescription = null, tint = Color(0xFFB45309), modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Messages queued offline. Tap to sync.",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFFB45309)
+                            )
+                        }
+                        Text("Retry Now", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = RoyalBluePrimary)
+                    }
+                }
+            }
+
             // Messages LazyColumn
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(horizontal = 16.dp),
                 contentPadding = PaddingValues(vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(conversation.messages, key = { it.id }) { message ->
-                    ChatMessageBubble(message = message)
+                items(displayMessages, key = { it.id }) { message ->
+                    ChatMessageBubble(
+                        message = message,
+                        onMessageClick = { selectedMessageForActions = message },
+                        onReplyClick = { viewModel.setReplyingTo(message) },
+                        onReactionClick = { emoji -> viewModel.addReaction(message.id, emoji) }
+                    )
                 }
             }
         }
     }
 
-    // Phase 2 Modals triggered from Conversation Screen
+    // Message Action Sheet / Context Modal
+    if (selectedMessageForActions != null) {
+        val msg = selectedMessageForActions!!
+        AlertDialog(
+            onDismissRequest = { selectedMessageForActions = null },
+            title = {
+                Text("Message Actions", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            },
+            text = {
+                Column {
+                    // Reactions Row
+                    Text("Reactions", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        listOf("❤️", "👍", "😂", "😮", "😢", "🛡️").forEach { emoji ->
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFEFF6FF))
+                                    .clickable {
+                                        viewModel.addReaction(msg.id, emoji)
+                                        selectedMessageForActions = null
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(emoji, fontSize = 18.sp)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Reply Action
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable {
+                                viewModel.setReplyingTo(msg)
+                                selectedMessageForActions = null
+                            }
+                            .padding(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Outlined.Reply, contentDescription = null, tint = RoyalBluePrimary, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text("Quote / Reply", fontSize = 13.sp)
+                    }
+
+                    // Edit Action (If user's own message and not deleted)
+                    if (msg.isMine && !msg.isDeleted) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    editingText = msg.text
+                                    showEditDialog = true
+                                }
+                                .padding(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Outlined.Edit, contentDescription = null, tint = RoyalBluePrimary, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text("Edit Message", fontSize = 13.sp)
+                        }
+
+                        // Delete Action
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    viewModel.deleteMessage(msg.id)
+                                    selectedMessageForActions = null
+                                }
+                                .padding(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Outlined.Delete, contentDescription = null, tint = RoseDestructive, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text("Delete Message", color = RoseDestructive, fontSize = 13.sp)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { selectedMessageForActions = null }) {
+                    Text("Close")
+                }
+            }
+        )
+    }
+
+    // Edit Message Dialog
+    if (showEditDialog && selectedMessageForActions != null) {
+        val targetMsg = selectedMessageForActions!!
+        AlertDialog(
+            onDismissRequest = { showEditDialog = false },
+            title = { Text("Edit Message") },
+            text = {
+                OutlinedTextField(
+                    value = editingText,
+                    onValueChange = { editingText = it },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.editMessage(targetMsg.id, editingText)
+                        showEditDialog = false
+                        selectedMessageForActions = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary)
+                ) {
+                    Text("Save Edit")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEditDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     if (uiState.isPrivacyCheckOpen) {
         PrivacyCheckDialog(
             conversation = conversation,
@@ -351,6 +615,9 @@ fun ConversationScreen(
 @Composable
 fun ChatMessageBubble(
     message: ChatMessage,
+    onMessageClick: () -> Unit,
+    onReplyClick: () -> Unit,
+    onReactionClick: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val isMine = message.isMine
@@ -379,9 +646,65 @@ fun ChatMessageBubble(
                     color = MaterialTheme.colorScheme.outline,
                     shape = RoundedCornerShape(16.dp)
                 )
+                .clickable { onMessageClick() }
                 .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
             Column {
+                // Quoted Reply Preview inside bubble
+                if (message.replyToMessageId != null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isMine) Color(0xFF1E40AF) else Color(0xFFF1F5F9))
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                    ) {
+                        Column {
+                            Text(
+                                text = message.replyToSenderName ?: "Peer",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isMine) Color(0xFF93C5FD) else RoyalBluePrimary
+                            )
+                            Text(
+                                text = message.replyToText ?: "Quoted message",
+                                fontSize = 11.sp,
+                                color = if (isMine) Color(0xFFE2E8F0) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                }
+
+                // File or Media Attachment Header
+                if (message.attachmentType != null) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isMine) Color(0xFF1E3A8A) else Color(0xFFEFF6FF))
+                            .padding(8.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = if (message.attachmentType == "IMAGE") Icons.Outlined.Image else Icons.Outlined.Description,
+                                contentDescription = null,
+                                tint = if (isMine) Color.White else RoyalBluePrimary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = message.attachmentName ?: "Attachment",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isMine) Color.White else RoyalBluePrimary
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                }
+
                 if (message.isScrubbedMedia) {
                     Box(
                         modifier = Modifier
@@ -417,6 +740,15 @@ fun ChatMessageBubble(
                     lineHeight = 20.sp
                 )
 
+                if (message.isEdited) {
+                    Text(
+                        text = "(edited)",
+                        fontSize = 9.sp,
+                        color = timeColor,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+
                 Spacer(modifier = Modifier.height(4.dp))
 
                 Row(
@@ -430,13 +762,67 @@ fun ChatMessageBubble(
                     )
                     if (isMine) {
                         Spacer(modifier = Modifier.width(4.dp))
-                        Icon(
-                            imageVector = Icons.Outlined.Check,
-                            contentDescription = "Delivered",
-                            tint = timeColor,
-                            modifier = Modifier.size(12.dp)
+                        when (message.deliveryStatus) {
+                            "PENDING" -> Icon(
+                                imageVector = Icons.Outlined.Schedule,
+                                contentDescription = "Queued",
+                                tint = timeColor,
+                                modifier = Modifier.size(12.dp)
+                            )
+                            "SENT" -> Icon(
+                                imageVector = Icons.Outlined.Check,
+                                contentDescription = "Sent",
+                                tint = timeColor,
+                                modifier = Modifier.size(12.dp)
+                            )
+                            "DELIVERED" -> Icon(
+                                imageVector = Icons.Outlined.DoneAll,
+                                contentDescription = "Delivered",
+                                tint = timeColor,
+                                modifier = Modifier.size(12.dp)
+                            )
+                            "READ" -> Icon(
+                                imageVector = Icons.Outlined.DoneAll,
+                                contentDescription = "Read",
+                                tint = EmeraldVerified,
+                                modifier = Modifier.size(12.dp)
+                            )
+                            else -> Icon(
+                                imageVector = Icons.Outlined.ErrorOutline,
+                                contentDescription = "Failed",
+                                tint = RoseDestructive,
+                                modifier = Modifier.size(12.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Reaction chips below message bubble
+        if (message.reactions.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(3.dp))
+            Row(
+                horizontalArrangement = if (isMine) Arrangement.End else Arrangement.Start,
+                modifier = Modifier.padding(horizontal = 4.dp)
+            ) {
+                message.reactions.forEach { (emoji, count) ->
+                    val isMineReacted = message.myReactions.contains(emoji)
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (isMineReacted) Color(0xFFDBEAFE) else Color(0xFFF1F5F9))
+                            .border(0.5.dp, if (isMineReacted) RoyalBluePrimary else Color(0xFFCBD5E1), RoundedCornerShape(12.dp))
+                            .clickable { onReactionClick(emoji) }
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = "$emoji $count",
+                            fontSize = 11.sp,
+                            fontWeight = if (isMineReacted) FontWeight.Bold else FontWeight.Normal
                         )
                     }
+                    Spacer(modifier = Modifier.width(4.dp))
                 }
             }
         }

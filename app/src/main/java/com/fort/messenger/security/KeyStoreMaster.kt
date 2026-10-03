@@ -14,25 +14,25 @@ import javax.crypto.spec.GCMParameterSpec
  * Android Keystore manager for hardware-backed local master key storage.
  * Protects private key material at rest without leaking plaintext.
  */
-class KeyStoreMaster(private val context: Context) {
+class KeyStoreMaster(private val context: Context? = null) {
 
     companion object {
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val MASTER_KEY_ALIAS = "FortMasterKey_v1"
-        private const val PREFS_NAME = "fort_secure_enclave_prefs"
         private const val GCM_IV_LENGTH = 12
         private const val GCM_TAG_LENGTH = 128
     }
 
-    private val keyStore: KeyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+    private var secretKey: SecretKey? = null
 
     init {
         ensureMasterKey()
     }
 
     private fun ensureMasterKey() {
-        if (!keyStore.containsAlias(MASTER_KEY_ALIAS)) {
-            try {
+        try {
+            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+            if (!keyStore.containsAlias(MASTER_KEY_ALIAS)) {
                 val keyGenerator = KeyGenerator.getInstance(
                     KeyProperties.KEY_ALGORITHM_AES,
                     ANDROID_KEYSTORE
@@ -46,17 +46,34 @@ class KeyStoreMaster(private val context: Context) {
                     .setKeySize(256)
                     .build()
                 keyGenerator.init(spec)
-                keyGenerator.generateKey()
-            } catch (e: Exception) {
-                // In local unit test environments where AndroidKeyStore provider is absent,
-                // fall back gracefully
+                secretKey = keyGenerator.generateKey()
+            } else {
+                secretKey = keyStore.getKey(MASTER_KEY_ALIAS, null) as? SecretKey
             }
+        } catch (e: Exception) {
+            // In unit test / JVM environments where AndroidKeyStore SPI is not registered,
+            // fall back to a secure software-isolated AES-256 key
+            initFallbackKey()
         }
     }
 
+    private fun initFallbackKey() {
+        try {
+            val keyGen = KeyGenerator.getInstance("AES")
+            keyGen.init(256, java.security.SecureRandom())
+            secretKey = keyGen.generateKey()
+        } catch (e: Exception) {
+            throw SecurityException("Failed to initialize cryptographic master key: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Encrypts plaintext data using AES-256-GCM.
+     * Fails closed: Never returns plaintext on error.
+     */
     fun encryptLocalData(plaintext: String): String {
-        return try {
-            val key = keyStore.getKey(MASTER_KEY_ALIAS, null) as? SecretKey ?: return plaintext
+        val key = secretKey ?: throw SecurityException("Master encryption key is unavailable.")
+        try {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, key)
             val iv = cipher.iv
@@ -64,18 +81,24 @@ class KeyStoreMaster(private val context: Context) {
             val combined = ByteArray(iv.size + encrypted.size)
             System.arraycopy(iv, 0, combined, 0, iv.size)
             System.arraycopy(encrypted, 0, combined, iv.size, encrypted.size)
-            Base64.encodeToString(combined, Base64.NO_WRAP)
+            return Base64.encodeToString(combined, Base64.NO_WRAP)
         } catch (e: Exception) {
-            plaintext
+            throw SecurityException("Local encryption failed: ${e.message}", e)
         }
     }
 
+    /**
+     * Decrypts ciphertext data using AES-256-GCM.
+     * Fails closed: Never returns unverified ciphertext on error.
+     */
     fun decryptLocalData(ciphertextBase64: String): String {
-        return try {
+        val key = secretKey ?: throw SecurityException("Master encryption key is unavailable.")
+        try {
             val combined = Base64.decode(ciphertextBase64, Base64.NO_WRAP)
-            if (combined.size < GCM_IV_LENGTH) return ciphertextBase64
+            if (combined.size < GCM_IV_LENGTH) {
+                throw SecurityException("Ciphertext payload is truncated or corrupted.")
+            }
 
-            val key = keyStore.getKey(MASTER_KEY_ALIAS, null) as? SecretKey ?: return ciphertextBase64
             val iv = ByteArray(GCM_IV_LENGTH)
             val ciphertext = ByteArray(combined.size - GCM_IV_LENGTH)
             System.arraycopy(combined, 0, iv, 0, GCM_IV_LENGTH)
@@ -85,9 +108,9 @@ class KeyStoreMaster(private val context: Context) {
             val spec = GCMParameterSpec(GCM_TAG_LENGTH, iv)
             cipher.init(Cipher.DECRYPT_MODE, key, spec)
             val decrypted = cipher.doFinal(ciphertext)
-            String(decrypted, Charsets.UTF_8)
+            return String(decrypted, Charsets.UTF_8)
         } catch (e: Exception) {
-            ciphertextBase64
+            throw SecurityException("Local decryption failed: ${e.message}", e)
         }
     }
 }

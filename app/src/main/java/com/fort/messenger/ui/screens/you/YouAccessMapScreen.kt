@@ -30,6 +30,8 @@ import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.PhonelinkLock
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Translate
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -521,6 +523,76 @@ fun YouAccessMapScreen(
                             Switch(
                                 checked = uiState.isNotificationRedacted,
                                 onCheckedChange = { viewModel.toggleNotificationRedacted() },
+                                colors = SwitchDefaults.colors(checkedThumbColor = RoyalBluePrimary)
+                            )
+                        }
+
+                        // Online Presence Privacy Toggle
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Visibility,
+                                    contentDescription = null,
+                                    tint = RoyalBluePrimary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text(
+                                        text = "Online Presence Visibility",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Allow verified connections to view presence",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = uiState.showOnlinePresence,
+                                onCheckedChange = { viewModel.toggleOnlinePresence() },
+                                colors = SwitchDefaults.colors(checkedThumbColor = RoyalBluePrimary)
+                            )
+                        }
+
+                        // Typing Status Indicator Toggle
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Edit,
+                                    contentDescription = null,
+                                    tint = RoyalBluePrimary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text(
+                                        text = "Send Typing Indicators",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Display real-time typing status in chat",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = uiState.showTypingIndicator,
+                                onCheckedChange = { viewModel.toggleTypingIndicator() },
                                 colors = SwitchDefaults.colors(checkedThumbColor = RoyalBluePrimary)
                             )
                         }

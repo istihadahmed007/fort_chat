@@ -23,6 +23,9 @@ interface UserAccountDao {
     @Query("UPDATE user_account SET redactNotifications = :redact WHERE userId = :userId")
     suspend fun updateRedactNotifications(userId: String, redact: Boolean)
 
+    @Query("UPDATE user_account SET showOnlinePresence = :showOnline, showTypingIndicator = :showTyping WHERE userId = :userId")
+    suspend fun updateOnlinePrivacy(userId: String, showOnline: Boolean, showTyping: Boolean)
+
     @Query("DELETE FROM user_account")
     suspend fun clearAccount()
 }
@@ -64,6 +67,9 @@ interface PeerConnectionDao {
 
     @Query("UPDATE peer_connections SET peerPublicKey = :newKey, keyChangeDetected = 1, isVerified = 0 WHERE connectionId = :connectionId")
     suspend fun reportKeyRotation(connectionId: String, newKey: String)
+
+    @Query("UPDATE peer_connections SET isTyping = :isTyping WHERE connectionId = :connectionId")
+    suspend fun updatePeerTyping(connectionId: String, isTyping: Boolean)
 }
 
 @Dao
@@ -95,8 +101,8 @@ interface ContactPassDao {
     @Query("UPDATE contact_passes SET isRevoked = 1 WHERE passId = :passId")
     suspend fun revokePass(passId: String)
 
-    @Query("UPDATE contact_passes SET isClaimed = 1 WHERE passId = :passId")
-    suspend fun markPassClaimed(passId: String)
+    @Query("UPDATE contact_passes SET isClaimed = 1, claimantUserId = :claimantUserId WHERE passId = :passId")
+    suspend fun markPassClaimed(passId: String, claimantUserId: String)
 }
 
 @Dao
@@ -113,6 +119,9 @@ interface PrivateRoomDao {
     @Query("UPDATE private_rooms SET tasksJson = :tasksJson WHERE roomId = :roomId")
     suspend fun updateRoomTasks(roomId: String, tasksJson: String)
 
+    @Query("UPDATE private_rooms SET membersJson = :membersJson, adminIdsJson = :adminIdsJson WHERE roomId = :roomId")
+    suspend fun updateRoomMembers(roomId: String, membersJson: String, adminIdsJson: String)
+
     @Query("UPDATE private_rooms SET isClosed = 1 WHERE roomId = :roomId")
     suspend fun closeRoom(roomId: String)
 }
@@ -125,11 +134,29 @@ interface ChatMessageDao {
     @Query("SELECT * FROM chat_messages WHERE conversationId = :conversationId ORDER BY timestamp DESC LIMIT 1")
     suspend fun getLastMessageForConversation(conversationId: String): ChatMessageEntity?
 
+    @Query("SELECT * FROM chat_messages WHERE deliveryStatus = 'PENDING'")
+    suspend fun getPendingOutboxMessages(): List<ChatMessageEntity>
+
+    @Query("SELECT * FROM chat_messages WHERE messageId = :messageId LIMIT 1")
+    suspend fun getMessageById(messageId: String): ChatMessageEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(message: ChatMessageEntity)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessages(messages: List<ChatMessageEntity>)
+
+    @Query("UPDATE chat_messages SET deliveryStatus = :status WHERE messageId = :messageId")
+    suspend fun updateDeliveryStatus(messageId: String, status: String)
+
+    @Query("UPDATE chat_messages SET reactionsJson = :reactionsJson WHERE messageId = :messageId")
+    suspend fun updateMessageReactions(messageId: String, reactionsJson: String)
+
+    @Query("UPDATE chat_messages SET encryptedLocalPayload = :newPayload, isEdited = 1 WHERE messageId = :messageId")
+    suspend fun editMessageContent(messageId: String, newPayload: String)
+
+    @Query("UPDATE chat_messages SET isDeleted = 1 WHERE messageId = :messageId")
+    suspend fun markMessageDeleted(messageId: String)
 
     @Query("DELETE FROM chat_messages WHERE conversationId = :conversationId")
     suspend fun deleteConversationMessages(conversationId: String)

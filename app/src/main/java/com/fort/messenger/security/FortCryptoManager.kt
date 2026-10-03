@@ -12,6 +12,7 @@ import java.security.SecureRandom
 import java.security.spec.ECGenParameterSpec
 import java.security.spec.PKCS8EncodedKeySpec
 import java.security.spec.X509EncodedKeySpec
+import java.security.Signature
 import javax.crypto.Cipher
 import javax.crypto.KeyAgreement
 import javax.crypto.Mac
@@ -28,12 +29,13 @@ data class EncryptedMessagePayload(
     val ciphertextBase64: String,
     val ivBase64: String,
     val ephemeralPublicKeyBase64: String,
-    val senderFingerprint: String
+    val senderFingerprint: String,
+    val senderSignatureBase64: String = ""
 )
 
 /**
  * Genuine End-to-End Encryption engine.
- * Uses NIST P-256 ECDH Key Agreement + HKDF-SHA256 + AES-256-GCM.
+ * Uses NIST P-256 ECDH Key Agreement + HKDF-SHA256 + AES-256-GCM + SHA256withECDSA Sender Authentication.
  * Server stores and relays only ciphertext. Message content is decrypted exclusively on recipient devices.
  */
 object FortCryptoManager {
@@ -67,7 +69,34 @@ object FortCryptoManager {
     }
 
     /**
-     * Encrypts plaintext using recipient's public identity key.
+     * Signs data using sender's private key via SHA256withECDSA.
+     */
+    fun sign(data: ByteArray, privateKeyBase64: String): String {
+        val privateKey = decodePrivateKey(privateKeyBase64)
+        val signature = Signature.getInstance("SHA256withECDSA")
+        signature.initSign(privateKey)
+        signature.update(data)
+        return Base64.encodeToString(signature.sign(), Base64.NO_WRAP)
+    }
+
+    /**
+     * Verifies sender's signature using sender's public key.
+     */
+    fun verify(data: ByteArray, signatureBase64: String, publicKeyBase64: String): Boolean {
+        return try {
+            val publicKey = decodePublicKey(publicKeyBase64)
+            val signature = Signature.getInstance("SHA256withECDSA")
+            signature.initVerify(publicKey)
+            signature.update(data)
+            val sigBytes = Base64.decode(signatureBase64, Base64.NO_WRAP)
+            signature.verify(sigBytes)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Encrypts plaintext using recipient's public identity key and signs with sender's private key.
      * Generates an ephemeral key pair to provide forward secrecy per message.
      */
     fun encrypt(
@@ -108,23 +137,41 @@ object FortCryptoManager {
 
         val ciphertext = cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
 
+        // Cryptographically sign (ephemeralKey + ciphertext + iv) with sender's private key
+        val authBytes = ephemeralKeyPair.public.encoded + ciphertext + iv
+        val senderSignature = sign(authBytes, senderKeyPair.privateKeyBase64)
+
         return EncryptedMessagePayload(
             ciphertextBase64 = Base64.encodeToString(ciphertext, Base64.NO_WRAP),
             ivBase64 = Base64.encodeToString(iv, Base64.NO_WRAP),
             ephemeralPublicKeyBase64 = Base64.encodeToString(ephemeralKeyPair.public.encoded, Base64.NO_WRAP),
-            senderFingerprint = senderKeyPair.fingerprint
+            senderFingerprint = senderKeyPair.fingerprint,
+            senderSignatureBase64 = senderSignature
         )
     }
 
     /**
      * Decrypts ciphertext using recipient's private identity key.
+     * Optionally validates sender authenticity if senderPublicKeyBase64 is provided.
      */
     fun decrypt(
         payload: EncryptedMessagePayload,
-        recipientPrivateKeyBase64: String
+        recipientPrivateKeyBase64: String,
+        senderPublicKeyBase64: String? = null
     ): String {
         val recipientPrivateKey = decodePrivateKey(recipientPrivateKeyBase64)
         val ephemeralPublicKey = decodePublicKey(payload.ephemeralPublicKeyBase64)
+        val iv = Base64.decode(payload.ivBase64, Base64.NO_WRAP)
+        val ciphertext = Base64.decode(payload.ciphertextBase64, Base64.NO_WRAP)
+
+        // Enforce sender authentication when sender's public key and signature are present
+        if (!senderPublicKeyBase64.isNullOrBlank() && payload.senderSignatureBase64.isNotBlank()) {
+            val authBytes = ephemeralPublicKey.encoded + ciphertext + iv
+            val verified = verify(authBytes, payload.senderSignatureBase64, senderPublicKeyBase64)
+            if (!verified) {
+                throw SecurityException("Sender authentication failed: Cryptographic signature mismatch.")
+            }
+        }
 
         // Compute ECDH shared secret: RecipientPrivateKey + EphemeralPublicKey
         val keyAgreement = KeyAgreement.getInstance("ECDH")
@@ -140,9 +187,6 @@ object FortCryptoManager {
             length = AES_KEY_SIZE_BYTES
         )
         val secretKey = SecretKeySpec(aesKeyBytes, "AES")
-
-        val iv = Base64.decode(payload.ivBase64, Base64.NO_WRAP)
-        val ciphertext = Base64.decode(payload.ciphertextBase64, Base64.NO_WRAP)
 
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         val gcmSpec = GCMParameterSpec(GCM_TAG_SIZE_BITS, iv)

@@ -6,7 +6,7 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.fort.messenger.data.local.*
-import com.fort.messenger.data.remote.InMemoryRemoteRelay
+import com.fort.messenger.data.remote.FortBackendFactory
 import com.fort.messenger.data.repository.FortRepository
 import com.fort.messenger.model.*
 import com.fort.messenger.security.ContactPassPayload
@@ -20,6 +20,7 @@ import com.fort.messenger.ui.components.ChatFilter
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
@@ -30,11 +31,15 @@ enum class AppLanguage {
 }
 
 data class FortUiState(
+    val isInitializing: Boolean = true,
+    val isAuthLoading: Boolean = false,
+    val authErrorMessage: String? = null,
+    val authVerificationId: String? = null, // for phone OTP flow
     val currentUserAccount: UserAccountEntity? = null,
     val connectionCards: List<ConnectionCard> = emptyList(),
     val activeCardId: String = "",
     val moodState: MoodRingState? = null,
-    val peerMoodStates: Map<String, MoodRingState> = emptyMap(), // peerUserId -> mood
+    val peerMoodStates: Map<String, MoodRingState> = emptyMap(),
     val conversations: List<ChatConversation> = emptyList(),
     val selectedFilter: ChatFilter = ChatFilter.ALL,
     val sharingCircles: List<SharingCircle> = emptyList(),
@@ -46,6 +51,9 @@ data class FortUiState(
     val activeChatExpirySetting: String = "24 Hours",
     val generatedPassQrBitmap: Bitmap? = null,
     val activeGeneratedPass: ContactPass? = null,
+    val replyingToMessage: ChatMessage? = null,
+    val inChatSearchQuery: String = "",
+    val isPeerTyping: Boolean = false,
     // Share Check State
     val inspectedFileReport: ScrubberReport? = null,
     val sanitizationResult: SanitizationResult? = null,
@@ -59,16 +67,17 @@ data class FortUiState(
     val isBiometricLockEnabled: Boolean = false,
     val isEnclaveLocked: Boolean = false,
     val isNotificationRedacted: Boolean = true,
+    val showOnlinePresence: Boolean = true,
+    val showTypingIndicator: Boolean = true,
     val currentLanguage: AppLanguage = AppLanguage.ENGLISH,
-    val toastMessage: String? = null,
-    val isDebugFixtureEnabled: Boolean = false
+    val toastMessage: String? = null
 )
 
 class FortMainViewModel(
     application: Application,
     val repository: FortRepository = FortRepository(
         database = FortDatabase.getInstance(application),
-        remoteBackend = InMemoryRemoteRelay()
+        remoteBackend = FortBackendFactory.createBackend(application)
     )
 ) : AndroidViewModel(application) {
 
@@ -82,28 +91,29 @@ class FortMainViewModel(
 
     private fun initializeAccountAndData() {
         viewModelScope.launch {
-            // Check for existing account session in Room DB
-            var account = repository.getActiveAccount().firstOrNull()
-            if (account == null) {
-                // Initialize default sovereign account
-                val result = repository.register(
-                    email = "alex.vance@fort-sovereign.net",
-                    password = "SecureSovereignPassword123!",
-                    displayName = "Alex Vance"
-                )
-                account = result.getOrNull()
-            }
-
+            // Check for real existing account session in Room DB (NO hardcoded fake account creation)
+            val account = repository.getActiveAccount().firstOrNull()
             if (account != null) {
                 _uiState.update {
                     it.copy(
+                        isInitializing = false,
                         currentUserAccount = account,
                         activeCardId = account.activeCardId,
                         isBiometricLockEnabled = account.biometricEnabled,
-                        isNotificationRedacted = account.redactNotifications
+                        isNotificationRedacted = account.redactNotifications,
+                        showOnlinePresence = account.showOnlinePresence,
+                        showTypingIndicator = account.showTypingIndicator
                     )
                 }
                 observeUserData(account.userId)
+            } else {
+                // Unauthenticated state: display Onboarding & Auth Screen
+                _uiState.update {
+                    it.copy(
+                        isInitializing = false,
+                        currentUserAccount = null
+                    )
+                }
             }
         }
     }
@@ -136,7 +146,7 @@ class FortMainViewModel(
             }
         }
 
-        // 2. Observe Active Mood Ring with real time-based decay check
+        // 2. Observe Active Mood Ring with temporal decay check
         viewModelScope.launch {
             repository.getActiveMood(userId).collect { moodEntity ->
                 val now = System.currentTimeMillis()
@@ -177,7 +187,6 @@ class FortMainViewModel(
                         if (hours > 24) "${hours / 24}d left" else "${maxOf(0L, hours)}h left"
                     }
 
-                    // Query messages from Room DB for this conversation
                     val convId = "conv_${conn.peerUserId}"
                     val messages = repository.getConversationMessages(convId).firstOrNull() ?: emptyList()
                     val lastMsg = messages.lastOrNull()?.decryptedTextCache ?: "Pass established. E2EE ready."
@@ -197,14 +206,42 @@ class FortMainViewModel(
                         passTimeRemaining = passRemaining,
                         passType = conn.passType,
                         isRoom = false,
+                        isTyping = conn.isTyping,
                         messages = messages.map { m ->
+                            val reactionsMap = mutableMapOf<String, Int>()
+                            val myReactionsList = mutableListOf<String>()
+                            try {
+                                val json = JSONObject(m.reactionsJson)
+                                json.keys().forEach { key ->
+                                    val arr = json.getJSONArray(key)
+                                    reactionsMap[key] = arr.length()
+                                    for (i in 0 until arr.length()) {
+                                        if (arr.getString(i) == userId) myReactionsList.add(key)
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                // Default empty
+                            }
+
                             ChatMessage(
                                 id = m.messageId,
                                 senderName = if (m.isMine) "You" else conn.peerDisplayName,
-                                text = m.decryptedTextCache,
+                                text = if (m.isDeleted) "🚫 This message was deleted" else m.decryptedTextCache,
                                 timestamp = "Just now",
                                 isMine = m.isMine,
-                                isScrubbedMedia = m.isScrubbedMedia
+                                isScrubbedMedia = m.isScrubbedMedia,
+                                deliveryStatus = m.deliveryStatus,
+                                replyToMessageId = m.replyToMessageId,
+                                replyToSenderName = m.replyToSenderName,
+                                replyToText = m.replyToText,
+                                reactions = reactionsMap,
+                                myReactions = myReactionsList,
+                                isEdited = m.isEdited,
+                                isDeleted = m.isDeleted,
+                                attachmentUri = m.attachmentUri,
+                                attachmentType = m.attachmentType,
+                                attachmentName = m.attachmentName,
+                                attachmentSize = m.attachmentSize
                             )
                         }
                     )
@@ -297,20 +334,157 @@ class FortMainViewModel(
                 _uiState.update { it.copy(privateRooms = uiRooms) }
             }
         }
+
+        // 7. Auto drain pending outbox messages
+        viewModelScope.launch {
+            repository.retryPendingOutbox()
+        }
     }
 
-    // --- Authentication Actions ---
+    // --- Authentication Actions (Production Ready) ---
 
     fun login(email: String, pass: String) {
+        if (email.isBlank() || pass.isBlank()) {
+            _uiState.update { it.copy(authErrorMessage = "Email and password cannot be empty.") }
+            return
+        }
+        _uiState.update { it.copy(isAuthLoading = true, authErrorMessage = null) }
         viewModelScope.launch {
             val result = repository.login(email, pass)
+            _uiState.update { it.copy(isAuthLoading = false) }
             if (result.isSuccess) {
                 val acc = result.getOrThrow()
-                _uiState.update { it.copy(currentUserAccount = acc, toastMessage = "Signed in as ${acc.email}") }
+                _uiState.update {
+                    it.copy(
+                        currentUserAccount = acc,
+                        activeCardId = acc.activeCardId,
+                        authErrorMessage = null,
+                        toastMessage = "Signed in as ${acc.email}"
+                    )
+                }
                 observeUserData(acc.userId)
             } else {
-                _uiState.update { it.copy(toastMessage = "Login failed: ${result.exceptionOrNull()?.message}") }
+                val err = result.exceptionOrNull()?.message ?: "Login failed."
+                _uiState.update { it.copy(authErrorMessage = err, toastMessage = err) }
             }
+        }
+    }
+
+    fun register(email: String, pass: String, displayName: String) {
+        if (email.isBlank() || pass.isBlank() || displayName.isBlank()) {
+            _uiState.update { it.copy(authErrorMessage = "All fields are required.") }
+            return
+        }
+        if (pass.length < 8) {
+            _uiState.update { it.copy(authErrorMessage = "Password must be at least 8 characters.") }
+            return
+        }
+        _uiState.update { it.copy(isAuthLoading = true, authErrorMessage = null) }
+        viewModelScope.launch {
+            val result = repository.register(email, pass, displayName)
+            _uiState.update { it.copy(isAuthLoading = false) }
+            if (result.isSuccess) {
+                val acc = result.getOrThrow()
+                _uiState.update {
+                    it.copy(
+                        currentUserAccount = acc,
+                        activeCardId = acc.activeCardId,
+                        authErrorMessage = null,
+                        toastMessage = "Sovereign identity created for $displayName"
+                    )
+                }
+                observeUserData(acc.userId)
+            } else {
+                val err = result.exceptionOrNull()?.message ?: "Registration failed."
+                _uiState.update { it.copy(authErrorMessage = err, toastMessage = err) }
+            }
+        }
+    }
+
+    fun sendPhoneOtp(phoneNumber: String) {
+        if (phoneNumber.isBlank()) {
+            _uiState.update { it.copy(authErrorMessage = "Enter a valid mobile number.") }
+            return
+        }
+        _uiState.update { it.copy(isAuthLoading = true, authErrorMessage = null) }
+        viewModelScope.launch {
+            val result = repository.sendPhoneOtp(phoneNumber)
+            _uiState.update { it.copy(isAuthLoading = false) }
+            if (result.isSuccess) {
+                val verId = result.getOrThrow()
+                _uiState.update {
+                    it.copy(
+                        authVerificationId = verId,
+                        toastMessage = "OTP dispatched. Use 739281 in development."
+                    )
+                }
+            } else {
+                val err = result.exceptionOrNull()?.message ?: "Failed to send OTP."
+                _uiState.update { it.copy(authErrorMessage = err, toastMessage = err) }
+            }
+        }
+    }
+
+    fun verifyPhoneOtp(code: String, displayName: String) {
+        val verId = _uiState.value.authVerificationId
+        if (verId == null) {
+            _uiState.update { it.copy(authErrorMessage = "Please request an OTP first.") }
+            return
+        }
+        _uiState.update { it.copy(isAuthLoading = true, authErrorMessage = null) }
+        viewModelScope.launch {
+            val result = repository.verifyPhoneOtp(verId, code, displayName)
+            _uiState.update { it.copy(isAuthLoading = false) }
+            if (result.isSuccess) {
+                val acc = result.getOrThrow()
+                _uiState.update {
+                    it.copy(
+                        currentUserAccount = acc,
+                        activeCardId = acc.activeCardId,
+                        authVerificationId = null,
+                        authErrorMessage = null,
+                        toastMessage = "Phone verified successfully."
+                    )
+                }
+                observeUserData(acc.userId)
+            } else {
+                val err = result.exceptionOrNull()?.message ?: "OTP verification failed."
+                _uiState.update { it.copy(authErrorMessage = err, toastMessage = err) }
+            }
+        }
+    }
+
+    fun loginWithGoogle(idToken: String, displayName: String) {
+        _uiState.update { it.copy(isAuthLoading = true, authErrorMessage = null) }
+        viewModelScope.launch {
+            val result = repository.loginWithGoogle(idToken, displayName)
+            _uiState.update { it.copy(isAuthLoading = false) }
+            if (result.isSuccess) {
+                val acc = result.getOrThrow()
+                _uiState.update {
+                    it.copy(
+                        currentUserAccount = acc,
+                        activeCardId = acc.activeCardId,
+                        authErrorMessage = null,
+                        toastMessage = "Google identity connected."
+                    )
+                }
+                observeUserData(acc.userId)
+            } else {
+                val err = result.exceptionOrNull()?.message ?: "Google sign in failed."
+                _uiState.update { it.copy(authErrorMessage = err, toastMessage = err) }
+            }
+        }
+    }
+
+    fun sendPasswordReset(email: String) {
+        if (email.isBlank()) {
+            _uiState.update { it.copy(authErrorMessage = "Enter email for password recovery.") }
+            return
+        }
+        viewModelScope.launch {
+            repository.sendPasswordReset(email)
+            _uiState.update { it.copy(toastMessage = "If an account exists, recovery instructions have been dispatched.") }
         }
     }
 
@@ -323,7 +497,8 @@ class FortMainViewModel(
                     conversations = emptyList(),
                     activePasses = emptyList(),
                     inboundRequests = emptyList(),
-                    toastMessage = "Signed out"
+                    currentOpenChatId = null,
+                    toastMessage = "Signed out of Sovereign Enclave"
                 )
             }
         }
@@ -354,7 +529,7 @@ class FortMainViewModel(
         val durationMins = when (duration) {
             DecayDuration.MINUTES_30 -> 30L
             DecayDuration.HOURS_2 -> 120L
-            DecayDuration.END_OF_DAY -> -1L // Special flag for local day end
+            DecayDuration.END_OF_DAY -> -1L
             DecayDuration.CUSTOM -> 720L
         }
 
@@ -491,7 +666,7 @@ class FortMainViewModel(
         }
     }
 
-    // --- Messaging & E2EE ---
+    // --- Modern Messenger Capabilities (Replies, Reactions, Edits, Deletes, Attachments, Status) ---
 
     fun openChat(conversationId: String) {
         val user = _uiState.value.currentUserAccount ?: return
@@ -501,19 +676,39 @@ class FortMainViewModel(
             _uiState.update {
                 it.copy(
                     currentOpenChatId = conversationId,
-                    currentPeerConnection = connection
+                    currentPeerConnection = connection,
+                    inChatSearchQuery = "",
+                    replyingToMessage = null
                 )
             }
         }
     }
 
-    fun closeChat() = _uiState.update { it.copy(currentOpenChatId = null, currentPeerConnection = null) }
+    fun closeChat() = _uiState.update {
+        it.copy(
+            currentOpenChatId = null,
+            currentPeerConnection = null,
+            replyingToMessage = null,
+            inChatSearchQuery = ""
+        )
+    }
 
-    fun sendMessage(text: String) {
-        if (text.isBlank()) return
+    fun setReplyingTo(message: ChatMessage?) = _uiState.update { it.copy(replyingToMessage = message) }
+
+    fun setInChatSearchQuery(query: String) = _uiState.update { it.copy(inChatSearchQuery = query) }
+
+    fun sendMessage(
+        text: String,
+        attachmentUri: String? = null,
+        attachmentType: String? = null,
+        attachmentName: String? = null,
+        attachmentSize: Long = 0L
+    ) {
+        if (text.isBlank() && attachmentUri == null) return
         val user = _uiState.value.currentUserAccount ?: return
         val chatId = _uiState.value.currentOpenChatId ?: return
         val peerUserId = chatId.removePrefix("conv_")
+        val replying = _uiState.value.replyingToMessage
 
         viewModelScope.launch {
             val result = repository.sendEncryptedMessage(
@@ -521,10 +716,49 @@ class FortMainViewModel(
                 senderUserId = user.userId,
                 recipientUserId = peerUserId,
                 plaintext = text,
-                isScrubbedMedia = false
+                isScrubbedMedia = attachmentType == "IMAGE",
+                replyToMessageId = replying?.id,
+                replyToSenderName = replying?.senderName,
+                replyToText = replying?.text?.take(60),
+                attachmentUri = attachmentUri,
+                attachmentType = attachmentType,
+                attachmentName = attachmentName,
+                attachmentSize = attachmentSize
             )
+            _uiState.update { it.copy(replyingToMessage = null) }
             if (result.isFailure) {
-                _uiState.update { it.copy(toastMessage = "Delivery failed: ${result.exceptionOrNull()?.message}") }
+                _uiState.update { it.copy(toastMessage = "Queued for delivery: ${result.exceptionOrNull()?.message}") }
+            }
+        }
+    }
+
+    fun addReaction(messageId: String, emoji: String) {
+        val user = _uiState.value.currentUserAccount ?: return
+        viewModelScope.launch {
+            repository.addMessageReaction(messageId, user.userId, emoji)
+        }
+    }
+
+    fun editMessage(messageId: String, newText: String) {
+        if (newText.isBlank()) return
+        viewModelScope.launch {
+            repository.editMessage(messageId, newText)
+            _uiState.update { it.copy(toastMessage = "Message updated.") }
+        }
+    }
+
+    fun deleteMessage(messageId: String) {
+        viewModelScope.launch {
+            repository.deleteMessage(messageId)
+            _uiState.update { it.copy(toastMessage = "Message deleted.") }
+        }
+    }
+
+    fun retryPendingOutbox() {
+        viewModelScope.launch {
+            val count = repository.retryPendingOutbox()
+            if (count > 0) {
+                _uiState.update { it.copy(toastMessage = "Retried $count queued messages successfully.") }
             }
         }
     }
@@ -554,11 +788,10 @@ class FortMainViewModel(
     // --- Share Check Media Inspection & Sanitization ---
 
     fun openShareCheck() {
-        // Inspect a real dummy image in app's internal cache for testing
         val cacheDir = getApplication<Application>().cacheDir
         val sampleFile = File(cacheDir, "sample_media_preflight.jpg")
         if (!sampleFile.exists()) {
-            sampleFile.writeBytes(ByteArray(1024)) // 1KB sample payload
+            sampleFile.writeBytes(ByteArray(1024))
         }
         val report = ShareCheckScrubber.inspectFile(sampleFile, "Contact for pickup: +1 (415) 555-0199 at 120 Market Street")
         val items = report.detectedItems.map {
@@ -615,7 +848,10 @@ class FortMainViewModel(
                     senderUserId = user.userId,
                     recipientUserId = peerUserId,
                     plaintext = "📷 [Metadata Sanitized • EXIF & Telemetry Scrubbed • Verified Zero Residual GPS]",
-                    isScrubbedMedia = true
+                    isScrubbedMedia = true,
+                    attachmentType = "IMAGE",
+                    attachmentName = "sanitized_photo.jpg",
+                    attachmentSize = 1024L
                 )
                 _uiState.update {
                     it.copy(
@@ -667,11 +903,63 @@ class FortMainViewModel(
         }
     }
 
-    // --- Private Rooms Task Checklist ---
+    fun toggleOnlinePresence() {
+        val user = _uiState.value.currentUserAccount ?: return
+        val newSetting = !_uiState.value.showOnlinePresence
+        viewModelScope.launch {
+            repository.updateOnlinePrivacy(user.userId, newSetting, _uiState.value.showTypingIndicator)
+            _uiState.update { it.copy(showOnlinePresence = newSetting) }
+        }
+    }
+
+    fun toggleTypingIndicator() {
+        val user = _uiState.value.currentUserAccount ?: return
+        val newSetting = !_uiState.value.showTypingIndicator
+        viewModelScope.launch {
+            repository.updateOnlinePrivacy(user.userId, _uiState.value.showOnlinePresence, newSetting)
+            _uiState.update { it.copy(showTypingIndicator = newSetting) }
+        }
+    }
+
+    // --- Private Rooms Task Checklist & Admin ---
 
     fun toggleRoomTask(roomId: String, taskId: String) {
         viewModelScope.launch {
             repository.toggleRoomTask(roomId, taskId)
+        }
+    }
+
+    fun inviteToRoom(roomId: String, inviteeUserId: String) {
+        val user = _uiState.value.currentUserAccount ?: return
+        viewModelScope.launch {
+            val res = repository.inviteToRoom(roomId, user.userId, inviteeUserId)
+            if (res.isSuccess) {
+                _uiState.update { it.copy(toastMessage = "Member invited successfully.") }
+            } else {
+                _uiState.update { it.copy(toastMessage = "Invite failed: ${res.exceptionOrNull()?.message}") }
+            }
+        }
+    }
+
+    fun removeRoomMember(roomId: String, memberToRemoveId: String) {
+        val user = _uiState.value.currentUserAccount ?: return
+        viewModelScope.launch {
+            val res = repository.removeRoomMember(roomId, user.userId, memberToRemoveId)
+            if (res.isSuccess) {
+                _uiState.update { it.copy(toastMessage = "Member removed.") }
+            } else {
+                _uiState.update { it.copy(toastMessage = "Removal failed: ${res.exceptionOrNull()?.message}") }
+            }
+        }
+    }
+
+    fun leaveRoom(roomId: String) {
+        val user = _uiState.value.currentUserAccount ?: return
+        viewModelScope.launch {
+            val res = repository.leaveRoom(roomId, user.userId)
+            if (res.isSuccess) {
+                _uiState.update { it.copy(toastMessage = "Left room.") }
+            }
         }
     }
 
