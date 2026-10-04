@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.fort.messenger.data.local.FortDatabase
+import com.fort.messenger.data.remote.FirebaseRemoteBackend
 import com.fort.messenger.data.remote.InMemoryRemoteRelay
 import com.fort.messenger.data.repository.FortRepository
 import com.fort.messenger.model.CardType
@@ -585,5 +586,27 @@ class FortRealProductionTest {
         // 3. Password reset
         val resetResult = repositoryAlice.sendPasswordReset("user@fort.net")
         assertTrue(resetResult.isSuccess)
+    }
+
+    @Test
+    fun testFirebaseRemoteBackendFailsExplicitlyWhenUnconfigured() = runBlocking {
+        val backend = FirebaseRemoteBackend(context)
+        val registerResult = backend.register("test@fort.net", "Password123!", "Test")
+        assertTrue(registerResult.isFailure)
+        val regErr = registerResult.exceptionOrNull()
+        assertTrue(regErr is IllegalStateException)
+        assertTrue(regErr?.message?.contains("Firebase is not configured") == true)
+
+        val loginResult = backend.login("test@fort.net", "Password123!")
+        assertTrue(loginResult.isFailure)
+        val loginErr = loginResult.exceptionOrNull()
+        assertTrue(loginErr is IllegalStateException)
+        assertTrue(loginErr?.message?.contains("Firebase is not configured") == true)
+
+        val googleResult = backend.loginWithGoogle("test_token")
+        assertTrue(googleResult.isFailure)
+        val googleErr = googleResult.exceptionOrNull()
+        assertTrue(googleErr is IllegalStateException)
+        assertTrue(googleErr?.message?.contains("Firebase is not configured") == true)
     }
 }

@@ -136,11 +136,11 @@ FORT includes a factory (`FortBackendFactory`) that initializes real production 
 The app now uses Firebase Authentication and Cloud Firestore for production accounts and messaging. Without a valid `google-services.json`, cloud authentication and messaging report that setup is missing; they do not create demo accounts or show fake success. CI can compile and run local tests without your Firebase project, but it cannot verify live sign-in or cloud access.
 
 ### 6.2 Security Rules Overview (`firestore.rules`)
-* **Packets (`/packets/{packetId}`):** Only designated recipient can read ciphertext packets. Senders cannot read packets after transmission. Senders listed on the recipient's blocklist are rejected on the server.
-* **Passes (`/passes/{passId}`):** Public read for unclaimed tokens. Single-use passes cannot be claimed twice (`isClaimed == false`). Revoked passes cannot be claimed.
-* **Rooms (`/rooms/{roomId}`):** Only room creator or designated admins can modify members or update room configurations; members can update tasks or leave.
-* **Moods (`/moods/{userId}`):** Only users in `allowedAudienceIds` can query a peer's mood. Expired moods are rejected.
-* **Blocklists (`/blocklists/{userId}/blocked/{peerId}`):** Users can only manage their own blocklists.
+* **Messages (`/messages/{messageId}`):** Only designated recipient or sender can read ciphertext packets. Senders cannot transmit to recipients where they are blocked. Recipient delivery/read receipts, participant reaction maps, and sender edits/deletions are strictly governed.
+* **Contact Passes (`/contact_passes/{passId}`):** Single-use passes cannot be claimed twice (`isClaimed == false`). Revoked or expired passes cannot be claimed. Atomic transactions serialize claims.
+* **Rooms (`/rooms/{roomId}`):** Only room creator or designated admins can modify members or update room configurations; ordinary members can update tasks or leave.
+* **Moods (`/moods/{userId}`):** Only authorized audience (`PRIVATE`, `CONNECTIONS`, `SELECTED_PEOPLE`, `CIRCLES`) can query a peer's mood. Expired moods are rejected.
+* **Blocklists (`/users/{userId}/blocklist/{blockedUserId}`):** Users can manage their blocklist; authenticated peers can query their own block status.
 
 ### 6.3 Real-Time Calling & WebRTC Signaling Notice
 * Knock First protects against unsolicited peer-to-peer calling connections.

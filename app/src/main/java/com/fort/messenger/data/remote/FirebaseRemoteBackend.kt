@@ -13,6 +13,7 @@ import com.google.firebase.auth.UserProfileChangeRequest
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -223,10 +224,14 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
 
     override suspend fun fetchPublicKey(userId: String, cardType: String): Result<String> = capture {
         requireSignedInUserId()
-        val snapshot = firestore.collection("users").document(userId)
+        val cardDoc = firestore.collection("users").document(userId)
             .collection("cards").document(cardType).get().await()
-        snapshot.getString("publicKey")
-            ?: throw IllegalStateException("No public key registered for this Fort card.")
+        cardDoc.getString("publicKey") ?: run {
+            val allCards = firestore.collection("users").document(userId)
+                .collection("cards").get().await()
+            allCards.documents.firstNotNullOfOrNull { it.getString("publicKey") }
+                ?: throw IllegalStateException("No public key registered for this Fort card.")
+        }
     }
 
     override suspend fun publishPass(pass: RemotePassRecord): Result<Unit> = capture {
@@ -307,12 +312,26 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
         requesterUserId: String
     ): Result<RemoteMoodRecord?> = capture {
         requireCaller(requesterUserId)
-        val snapshot = firestore.collection("moods").document(targetUserId).get().await()
-        if (snapshot.exists()) snapshot.toMoodRecord() else null
+        try {
+            val snapshot = firestore.collection("moods").document(targetUserId).get().await()
+            if (snapshot.exists()) snapshot.toMoodRecord() else null
+        } catch (e: FirebaseFirestoreException) {
+            if (e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                null
+            } else {
+                throw e
+            }
+        }
     }
 
     override suspend fun createRoom(room: RemoteRoomRecord): Result<Unit> = capture {
         requireCaller(room.creatorId)
+        if (room.creatorId !in room.members) {
+            room.members.add(room.creatorId)
+        }
+        if (room.creatorId !in room.adminIds) {
+            room.adminIds.add(room.creatorId)
+        }
         firestore.collection("rooms").document(room.roomId)
             .set(room.toFirestoreMap()).await()
         Unit
@@ -400,7 +419,7 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
                 .collection("blocklist").document(potentialSenderId)
                 .get().await().exists()
         } catch (_: Exception) {
-            true
+            false
         }
     }
 

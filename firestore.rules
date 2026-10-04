@@ -22,7 +22,8 @@ service cloud.firestore {
       }
 
       match /blocklist/{blockedUserId} {
-        allow read, write: if isOwner(userId);
+        allow read: if isOwner(userId) || (isAuthenticated() && request.auth.uid == blockedUserId);
+        allow write: if isOwner(userId);
       }
     }
 
