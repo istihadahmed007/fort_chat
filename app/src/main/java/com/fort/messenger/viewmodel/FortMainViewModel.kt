@@ -74,7 +74,7 @@ data class FortUiState(
     val toastMessage: String? = null
 )
 
-class FortMainViewModel(
+class FortMainViewModel @JvmOverloads constructor(
     application: Application,
     val repository: FortRepository = FortRepository(
         database = FortDatabase.getInstance(application),

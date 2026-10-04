@@ -611,4 +611,10 @@ class FortRealProductionTest {
             assertTrue(googleErr?.message?.contains("Firebase is not configured") == true)
         }
     }
+
+    @Test
+    fun testMainActivityLaunch() {
+        val controller = org.robolectric.Robolectric.buildActivity(MainActivity::class.java).setup()
+        assertNotNull(controller.get())
+    }
 }
