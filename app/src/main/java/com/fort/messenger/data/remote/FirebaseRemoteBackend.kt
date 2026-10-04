@@ -17,6 +17,7 @@ import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -117,46 +118,53 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
         remoteAccount(user)
     }
 
-    override suspend fun sendPhoneOtp(phoneNumber: String, activity: Activity?): Result<String> = capture {
-        requireFirebaseApp()
-        val hostActivity = activity ?: throw IllegalStateException(
-            "Phone verification needs an active app screen. Reopen the sign-in screen and try again."
-        )
-        withTimeout(70_000L) {
-            suspendCancellableCoroutine { continuation ->
-                val callbacks = object : PhoneAuthProvider.OnVerificationStateChangedCallbacks() {
-                    override fun onVerificationCompleted(credential: PhoneAuthCredential) {
-                        automaticPhoneCredential.set(credential)
-                        if (continuation.isActive) continuation.resume(AUTO_VERIFIED_SESSION)
-                    }
+    override suspend fun sendPhoneOtp(phoneNumber: String, activity: Activity?): Result<String> {
+        automaticPhoneCredential.set(null)
+        return try {
+            capture {
+                requireFirebaseApp()
+                val hostActivity = activity ?: throw IllegalStateException(
+                    "Phone verification needs an active app screen. Reopen the sign-in screen and try again."
+                )
+                withTimeout(70_000L) {
+                    suspendCancellableCoroutine { continuation ->
+                        val callbacks = object : PhoneAuthProvider.OnVerificationStateChangedCallbacks() {
+                            override fun onVerificationCompleted(credential: PhoneAuthCredential) {
+                                automaticPhoneCredential.set(credential)
+                                if (continuation.isActive) continuation.resume(AUTO_VERIFIED_SESSION)
+                            }
 
-                    override fun onVerificationFailed(error: com.google.firebase.FirebaseException) {
-                        if (continuation.isActive) continuation.resumeWithException(error)
-                    }
+                            override fun onVerificationFailed(error: com.google.firebase.FirebaseException) {
+                                if (continuation.isActive) continuation.resumeWithException(error)
+                            }
 
-                    override fun onCodeSent(
-                        verificationId: String,
-                        token: PhoneAuthProvider.ForceResendingToken
-                    ) {
-                        if (continuation.isActive) continuation.resume(verificationId)
-                    }
+                            override fun onCodeSent(
+                                verificationId: String,
+                                token: PhoneAuthProvider.ForceResendingToken
+                            ) {
+                                if (continuation.isActive) continuation.resume(verificationId)
+                            }
 
-                    override fun onCodeAutoRetrievalTimeOut(verificationId: String) {
-                        if (continuation.isActive) continuation.resume(verificationId)
+                            override fun onCodeAutoRetrievalTimeOut(verificationId: String) {
+                                if (continuation.isActive) continuation.resume(verificationId)
+                            }
+                        }
+                        try {
+                            val options = PhoneAuthOptions.newBuilder(auth)
+                                .setPhoneNumber(phoneNumber.trim())
+                                .setTimeout(60L, TimeUnit.SECONDS)
+                                .setActivity(hostActivity)
+                                .setCallbacks(callbacks)
+                                .build()
+                            PhoneAuthProvider.verifyPhoneNumber(options)
+                        } catch (error: Exception) {
+                            if (continuation.isActive) continuation.resumeWithException(error)
+                        }
                     }
-                }
-                try {
-                    val options = PhoneAuthOptions.newBuilder(auth)
-                        .setPhoneNumber(phoneNumber.trim())
-                        .setTimeout(60L, TimeUnit.SECONDS)
-                        .setActivity(hostActivity)
-                        .setCallbacks(callbacks)
-                        .build()
-                    PhoneAuthProvider.verifyPhoneNumber(options)
-                } catch (error: Exception) {
-                    if (continuation.isActive) continuation.resumeWithException(error)
                 }
             }
+        } catch (_: TimeoutCancellationException) {
+            Result.failure(IllegalStateException("Phone verification timed out. Check the number and try again."))
         }
     }
 
