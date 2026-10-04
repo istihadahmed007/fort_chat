@@ -4,6 +4,11 @@ plugins {
   alias(libs.plugins.google.devtools.ksp)
 }
 
+// Keep source-only and CI builds possible without private Firebase project config.
+if (file("google-services.json").exists()) {
+  apply(plugin = "com.google.gms.google-services")
+}
+
 android {
   namespace = "com.fort.messenger"
   compileSdk = 36
@@ -47,6 +52,13 @@ android {
 
 dependencies {
   implementation(platform(libs.androidx.compose.bom))
+  implementation(platform(libs.firebase.bom))
+  implementation(libs.firebase.auth)
+  implementation(libs.firebase.firestore)
+  implementation(libs.androidx.credentials)
+  implementation(libs.androidx.credentials.play.services)
+  implementation(libs.googleid)
+  implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
   implementation(libs.androidx.activity.compose)
   implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.lifecycle.runtime.ktx)
