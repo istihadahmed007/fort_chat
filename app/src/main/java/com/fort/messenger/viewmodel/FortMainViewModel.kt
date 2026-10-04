@@ -62,6 +62,11 @@ data class FortUiState(
     // Modals
     val isMoodPickerOpen: Boolean = false,
     val isPassGeneratorOpen: Boolean = false,
+    val isPassScannerOpen: Boolean = false,
+    val scannedPassPayload: ContactPassPayload? = null,
+    val isClaimingPass: Boolean = false,
+    val passClaimError: String? = null,
+    val isNewChatMenuOpen: Boolean = false,
     val isPrivacyCheckOpen: Boolean = false,
     val isShareCheckOpen: Boolean = false,
     // Security & Preferences
@@ -584,10 +589,89 @@ class FortMainViewModel @JvmOverloads constructor(
         }
     }
 
-    // --- Contact Pass Generator Actions ---
+    // --- Contact Pass Generator, Scanner & Claim Actions ---
 
-    fun openPassGenerator() = _uiState.update { it.copy(isPassGeneratorOpen = true) }
+    fun openNewChatMenu() = _uiState.update { it.copy(isNewChatMenuOpen = true) }
+    fun closeNewChatMenu() = _uiState.update { it.copy(isNewChatMenuOpen = false) }
+
+    fun openPassGenerator() = _uiState.update { it.copy(isPassGeneratorOpen = true, isNewChatMenuOpen = false) }
     fun closePassGenerator() = _uiState.update { it.copy(isPassGeneratorOpen = false) }
+
+    fun openPassScanner() = _uiState.update { it.copy(isPassScannerOpen = true, isNewChatMenuOpen = false, passClaimError = null) }
+    fun closePassScanner() = _uiState.update { it.copy(isPassScannerOpen = false) }
+
+    fun onPassScanned(qrData: String) {
+        val payload = ContactPassQrEngine.parseQrOrToken(qrData)
+        if (payload != null) {
+            _uiState.update {
+                it.copy(
+                    isPassScannerOpen = false,
+                    scannedPassPayload = payload,
+                    passClaimError = null
+                )
+            }
+        } else {
+            _uiState.update {
+                it.copy(
+                    toastMessage = "Invalid QR code format. Not an authentic Fort Contact Pass."
+                )
+            }
+        }
+    }
+
+    fun dismissScannedPassPreview() {
+        _uiState.update {
+            it.copy(
+                scannedPassPayload = null,
+                passClaimError = null,
+                isClaimingPass = false
+            )
+        }
+    }
+
+    fun claimScannedPass(payload: ContactPassPayload) {
+        val user = _uiState.value.currentUserAccount ?: return
+        if (payload.issuerUserId.isNotBlank() && payload.issuerUserId == user.userId) {
+            _uiState.update {
+                it.copy(passClaimError = "You cannot claim your own contact pass.")
+            }
+            return
+        }
+
+        _uiState.update { it.copy(isClaimingPass = true, passClaimError = null) }
+        viewModelScope.launch {
+            val card = _uiState.value.connectionCards.firstOrNull()
+            val myDisplayName = card?.displayName ?: user.email.substringBefore("@")
+            val result = repository.claimPass(
+                token = payload.token,
+                claimantUserId = user.userId,
+                claimantDisplayName = myDisplayName
+            )
+            _uiState.update { it.copy(isClaimingPass = false) }
+            if (result.isSuccess) {
+                val connection = result.getOrThrow()
+                // Send initial greeting handshake message over E2EE channel
+                repository.sendEncryptedMessage(
+                    conversationId = "conv_${connection.peerUserId}",
+                    senderUserId = user.userId,
+                    recipientUserId = connection.peerUserId,
+                    plaintext = "🤝 Contact pass connected. Sovereign channel established."
+                )
+                val targetChatId = "conv_${connection.peerUserId}"
+                _uiState.update {
+                    it.copy(
+                        scannedPassPayload = null,
+                        passClaimError = null,
+                        currentOpenChatId = targetChatId,
+                        toastMessage = "Connected with ${connection.peerDisplayName}!"
+                    )
+                }
+            } else {
+                val err = result.exceptionOrNull()?.message ?: "Failed to claim contact pass."
+                _uiState.update { it.copy(passClaimError = err) }
+            }
+        }
+    }
 
     fun generateNewPass(cardType: CardType, durationType: PassDurationType): ContactPass? {
         val user = _uiState.value.currentUserAccount ?: return null
@@ -630,6 +714,9 @@ class FortMainViewModel @JvmOverloads constructor(
                         toastMessage = "Contact Pass generated: ${p.token}"
                     )
                 }
+            } else {
+                val err = result.exceptionOrNull()?.message ?: "Failed to generate pass remotely."
+                _uiState.update { it.copy(toastMessage = err) }
             }
         }
         return createdPass

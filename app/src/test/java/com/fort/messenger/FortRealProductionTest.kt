@@ -598,6 +598,100 @@ class FortRealProductionTest {
     }
 
     @Test
+    fun testQrBitmapGenerationAndDecoding() {
+        val payload = ContactPassPayload(
+            passId = "pass_test_123",
+            token = "PASS-TEST99",
+            issuerUserId = "user_alice_456",
+            issuerDisplayName = "Alice In Enclave",
+            issuerCardType = "WORK",
+            durationType = "SEVEN_DAYS",
+            expiresAt = System.currentTimeMillis() + 7 * 86400000L,
+            issuerPublicKey = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE..."
+        )
+
+        val qrBitmap = ContactPassQrEngine.generateQrBitmap(payload, 256, 256)
+        assertNotNull(qrBitmap)
+
+        val decodedJson = ContactPassQrEngine.decodeQrBitmap(qrBitmap)
+        assertNotNull(decodedJson)
+
+        val parsedPayload = ContactPassQrEngine.parseQrJson(decodedJson!!)
+        assertNotNull(parsedPayload)
+        assertEquals(payload.passId, parsedPayload?.passId)
+        assertEquals(payload.token, parsedPayload?.token)
+        assertEquals(payload.issuerUserId, parsedPayload?.issuerUserId)
+        assertEquals(payload.issuerDisplayName, parsedPayload?.issuerDisplayName)
+        assertEquals(payload.issuerCardType, parsedPayload?.issuerCardType)
+
+        // Raw token fallback parsing
+        val rawTokenPayload = ContactPassQrEngine.parseQrOrToken("PASS-XYZ987")
+        assertNotNull(rawTokenPayload)
+        assertEquals("PASS-XYZ987", rawTokenPayload?.token)
+    }
+
+    @Test
+    fun testTwoWayConnectionCreationAndMessaging() = runBlocking {
+        // Register Alice and Bob
+        val alice = repositoryAlice.register("alice2@fort.net", "Pass123!", "Alice Sovereign").getOrThrow()
+        val bob = repositoryBob.register("bob2@fort.net", "Pass456!", "Bob Sovereign").getOrThrow()
+
+        // Alice generates a pass
+        val pass = repositoryAlice.generatePass(alice.userId, CardType.PERSONAL, PassDurationType.SEVEN_DAYS).getOrThrow()
+        assertNotNull(pass)
+
+        // Bob claims Alice's pass
+        val bobConnResult = repositoryBob.claimPass(pass.token, bob.userId, "Bob Sovereign")
+        assertTrue(bobConnResult.isSuccess)
+        val bobConn = bobConnResult.getOrThrow()
+        assertEquals(alice.userId, bobConn.peerUserId)
+
+        // Bob sends greeting message to Alice
+        val sendResult = repositoryBob.sendEncryptedMessage(
+            conversationId = "conv_${alice.userId}",
+            senderUserId = bob.userId,
+            recipientUserId = alice.userId,
+            plaintext = "🤝 Hello from Bob! Sovereign channel open."
+        )
+        assertTrue(sendResult.isSuccess)
+
+        // Alice syncs inbound messages
+        val aliceSyncCount = repositoryAlice.syncInboundMessages(alice.userId).getOrThrow()
+        assertEquals(1, aliceSyncCount)
+
+        // Alice's reciprocal connection should now exist automatically
+        val aliceConn = databaseAlice.peerConnectionDao().getConnectionWithPeer(alice.userId, bob.userId)
+        assertNotNull(aliceConn)
+        assertEquals(bob.userId, aliceConn?.peerUserId)
+
+        // Alice sees Bob's message in the conversation
+        val aliceMessages = repositoryAlice.getConversationMessages("conv_${bob.userId}").first()
+        assertEquals(1, aliceMessages.size)
+        assertEquals("🤝 Hello from Bob! Sovereign channel open.", aliceMessages[0].decryptedTextCache)
+    }
+
+    @Test
+    fun testPassPublishFailureDoesNotSaveLocalPass() = runBlocking {
+        val alice = repositoryAlice.register("alice_fail@fort.net", "Pass123!", "Alice Fail").getOrThrow()
+
+        // Create a failing backend using interface delegation
+        val delegateRelay = InMemoryRemoteRelay()
+        val failingBackend = object : com.fort.messenger.data.remote.FortRemoteBackend by delegateRelay {
+            override suspend fun publishPass(pass: com.fort.messenger.data.remote.RemotePassRecord): Result<Unit> {
+                return Result.failure(IllegalStateException("Simulated Network Error"))
+            }
+        }
+        val failingRepo = FortRepository(databaseAlice, failingBackend)
+
+        val result = failingRepo.generatePass(alice.userId, CardType.PERSONAL, PassDurationType.SEVEN_DAYS)
+        assertTrue(result.isFailure)
+
+        // Verify that NO pass was stored in databaseAlice
+        val passes = databaseAlice.contactPassDao().getActivePasses(alice.userId).first()
+        assertTrue(passes.isEmpty())
+    }
+
+    @Test
     fun testMainActivityLaunch() {
         val controller = org.robolectric.Robolectric.buildActivity(MainActivity::class.java).setup()
         assertNotNull(controller.get())

@@ -32,6 +32,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fort.messenger.ui.modals.ContactPassGeneratorSheet
 import com.fort.messenger.ui.modals.MoodRingBottomSheet
+import com.fort.messenger.ui.modals.NewChatBottomSheet
+import com.fort.messenger.ui.modals.PassClaimPreviewDialog
+import com.fort.messenger.ui.modals.PassScannerModal
 import com.fort.messenger.ui.screens.chat.ConversationScreen
 import com.fort.messenger.ui.screens.chats.ChatsHomeScreen
 import com.fort.messenger.ui.screens.circles.CirclesRoomsScreen
@@ -165,6 +168,34 @@ fun FortNavGraph(
             },
             generatedQrBitmap = uiState.generatedPassQrBitmap,
             activePass = uiState.activeGeneratedPass
+        )
+    }
+
+    if (uiState.isNewChatMenuOpen) {
+        NewChatBottomSheet(
+            onDismissRequest = { viewModel.closeNewChatMenu() },
+            onScanInvitation = { viewModel.openPassScanner() },
+            onCreateInvitation = { viewModel.openPassGenerator() },
+            onFindByFortId = {
+                currentDestination = FortDestination.REQUESTS
+            }
+        )
+    }
+
+    if (uiState.isPassScannerOpen) {
+        PassScannerModal(
+            onDismissRequest = { viewModel.closePassScanner() },
+            onQrPayloadDetected = { qrData -> viewModel.onPassScanned(qrData) }
+        )
+    }
+
+    if (uiState.scannedPassPayload != null) {
+        PassClaimPreviewDialog(
+            payload = uiState.scannedPassPayload!!,
+            isClaiming = uiState.isClaimingPass,
+            errorMessage = uiState.passClaimError,
+            onAccept = { viewModel.claimScannedPass(uiState.scannedPassPayload!!) },
+            onDismiss = { viewModel.dismissScannedPassPreview() }
         )
     }
 }

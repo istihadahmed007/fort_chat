@@ -87,28 +87,20 @@ fun AuthScreen(
         ) {
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Sovereign Emblem Header
-            Box(
+            // Sovereign Brand Logo
+            androidx.compose.foundation.Image(
+                painter = androidx.compose.ui.res.painterResource(id = com.fort.messenger.R.drawable.ic_fort_logo),
+                contentDescription = "Fort Logo",
                 modifier = Modifier
-                    .size(68.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFFEFF6FF))
-                    .border(1.5.dp, RoyalBluePrimary, CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Shield,
-                    contentDescription = "Fort Emblem",
-                    tint = RoyalBluePrimary,
-                    modifier = Modifier.size(36.dp)
-                )
-            }
+                    .size(80.dp)
+                    .clip(RoundedCornerShape(20.dp))
+            )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
             Text(
                 text = "FORT",
-                fontSize = 24.sp,
+                fontSize = 26.sp,
                 fontWeight = FontWeight.Black,
                 letterSpacing = 2.sp,
                 color = MaterialTheme.colorScheme.onSurface

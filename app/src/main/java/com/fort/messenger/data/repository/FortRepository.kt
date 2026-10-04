@@ -362,7 +362,13 @@ class FortRepository(
             isSingleUse = isSingleUse,
             issuerPublicKey = userCard.publicKey
         )
-        remoteBackend.publishPass(remoteRecord)
+        val publishResult = remoteBackend.publishPass(remoteRecord)
+        if (publishResult.isFailure) {
+            return Result.failure(
+                publishResult.exceptionOrNull()
+                    ?: IllegalStateException("Failed to publish contact pass remotely.")
+            )
+        }
 
         val localEntity = ContactPassEntity(
             passId = passId,
@@ -557,6 +563,28 @@ class FortRepository(
                 // Fetch sender public key for cryptographic signature verification
                 val senderConn = database.peerConnectionDao().getConnectionWithPeer(currentUserId, packet.senderUserId)
                 val senderPubKey = senderConn?.peerPublicKey ?: remoteBackend.fetchPublicKey(packet.senderUserId, CardType.PERSONAL.name).getOrNull()
+
+                if (senderConn == null && senderPubKey != null) {
+                    val safetyNumber = FortCryptoManager.computeSafetyNumber(
+                        userCard.publicKey,
+                        senderPubKey
+                    )
+                    val autoConnection = PeerConnectionEntity(
+                        connectionId = "conn_${java.util.UUID.randomUUID()}",
+                        userId = currentUserId,
+                        peerUserId = packet.senderUserId,
+                        peerDisplayName = "Pass Peer",
+                        peerHandle = "@peer.${packet.senderUserId.takeLast(6)}",
+                        peerCardType = CardType.PERSONAL,
+                        peerPublicKey = senderPubKey,
+                        safetyNumber = safetyNumber,
+                        isVerified = false,
+                        passType = PassDurationType.SEVEN_DAYS,
+                        passExpiresAt = Long.MAX_VALUE,
+                        status = "ACTIVE"
+                    )
+                    database.peerConnectionDao().insertConnection(autoConnection)
+                }
 
                 val decrypted = FortCryptoManager.decrypt(
                     payload = com.fort.messenger.security.EncryptedMessagePayload(

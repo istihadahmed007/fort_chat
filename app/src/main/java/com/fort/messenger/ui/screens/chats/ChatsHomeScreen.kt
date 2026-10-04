@@ -20,6 +20,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.outlined.QrCode
+import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material3.Badge
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -75,12 +77,12 @@ fun ChatsHomeScreen(
                 subtitle = "Bounded & Private Comms",
                 activeCard = activeCard,
                 onActiveCardClick = { /* Can switch persona from top bar */ },
-                onScanQrClick = { viewModel.openPassGenerator() }
+                onScanQrClick = { viewModel.openPassScanner() }
             )
         },
         floatingActionButton = {
             FloatingActionButton(
-                onClick = { viewModel.openPassGenerator() },
+                onClick = { viewModel.openNewChatMenu() },
                 containerColor = RoyalBluePrimary,
                 contentColor = Color.White,
                 shape = CircleShape,
@@ -90,10 +92,10 @@ fun ChatsHomeScreen(
                     modifier = Modifier.padding(horizontal = 16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(imageVector = Icons.Default.Add, contentDescription = "New Contact Pass")
+                    Icon(imageVector = Icons.Default.Add, contentDescription = "New Chat")
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = if (uiState.currentLanguage == AppLanguage.BANGLA) "+ নতুন পাস" else "+ New Pass",
+                        text = if (uiState.currentLanguage == AppLanguage.BANGLA) "+ নতুন চ্যাট" else "+ New Chat",
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 14.sp
                     )
@@ -156,26 +158,65 @@ fun ChatsHomeScreen(
                     SovereignCard(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 24.dp)
+                            .padding(vertical = 16.dp)
                     ) {
                         Column(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Text(text = "🕊️", fontSize = 32.sp)
-                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(text = "🕊️", fontSize = 36.sp)
+                            Spacer(modifier = Modifier.height(10.dp))
                             Text(
-                                text = "No conversations in this filter",
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 15.sp,
+                                text = if (uiState.currentLanguage == AppLanguage.BANGLA) "কোন সক্রিয় চ্যাট নেই" else "No active conversations",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
-                            Spacer(modifier = Modifier.height(4.dp))
+                            Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "Create a bounded pass or check your inbound queue",
+                                text = "Scan a peer's QR invitation or create a pass to start private messaging",
                                 fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                lineHeight = 16.sp
                             )
+                            Spacer(modifier = Modifier.height(18.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                androidx.compose.material3.Button(
+                                    onClick = { viewModel.openPassScanner() },
+                                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    androidx.compose.material3.Icon(
+                                        imageVector = Icons.Outlined.QrCodeScanner,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Scan QR", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                }
+
+                                androidx.compose.material3.OutlinedButton(
+                                    onClick = { viewModel.openPassGenerator() },
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    androidx.compose.material3.Icon(
+                                        imageVector = Icons.Outlined.QrCode,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Create Pass", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
                         }
                     }
                 }

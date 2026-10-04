@@ -68,6 +68,22 @@ object ContactPassQrEngine {
         return bitmap
     }
 
+    fun decodeQrBitmap(bitmap: Bitmap): String? {
+        return try {
+            val width = bitmap.width
+            val height = bitmap.height
+            val pixels = IntArray(width * height)
+            bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+            val source = com.google.zxing.RGBLuminanceSource(width, height, pixels)
+            val binaryBitmap = com.google.zxing.BinaryBitmap(com.google.zxing.common.HybridBinarizer(source))
+            val reader = com.google.zxing.qrcode.QRCodeReader()
+            val result = reader.decode(binaryBitmap)
+            result.text
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     fun parseQrJson(jsonString: String): ContactPassPayload? {
         return try {
             val json = JSONObject(jsonString)
@@ -84,5 +100,25 @@ object ContactPassQrEngine {
         } catch (e: Exception) {
             null
         }
+    }
+
+    fun parseQrOrToken(input: String): ContactPassPayload? {
+        val trimmed = input.trim()
+        val fromJson = parseQrJson(trimmed)
+        if (fromJson != null) return fromJson
+
+        if (trimmed.startsWith("PASS-", ignoreCase = true) || trimmed.length >= 6) {
+            return ContactPassPayload(
+                passId = "pass_token",
+                token = trimmed.uppercase(),
+                issuerUserId = "",
+                issuerDisplayName = "Sovereign Peer",
+                issuerCardType = "PERSONAL",
+                durationType = "SEVEN_DAYS",
+                expiresAt = System.currentTimeMillis() + 7 * 86400000L,
+                issuerPublicKey = ""
+            )
+        }
+        return null
     }
 }
