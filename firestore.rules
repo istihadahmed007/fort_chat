@@ -74,6 +74,7 @@ service cloud.firestore {
           resource.data.isRevoked == false
           && request.time.toMillis() < resource.data.expiresAt
           && (!resource.data.isSingleUse || resource.data.isClaimed == false)
+          && (!resource.data.isClaimed || resource.data.claimantUserId == request.auth.uid)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isClaimed', 'claimantUserId'])
           && request.resource.data.isClaimed == true
           && request.resource.data.claimantUserId == request.auth.uid
