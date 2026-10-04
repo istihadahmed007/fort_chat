@@ -589,27 +589,12 @@ class FortRealProductionTest {
     }
 
     @Test
-    fun testFirebaseRemoteBackendFailsExplicitlyWhenUnconfigured() = runBlocking {
-        if (com.google.firebase.FirebaseApp.getApps(context).isEmpty()) {
-            val backend = FirebaseRemoteBackend(context)
-            val registerResult = backend.register("test@fort.net", "Password123!", "Test")
-            assertTrue(registerResult.isFailure)
-            val regErr = registerResult.exceptionOrNull()
-            assertTrue(regErr is IllegalStateException)
-            assertTrue(regErr?.message?.contains("Firebase is not configured") == true)
-
-            val loginResult = backend.login("test@fort.net", "Password123!")
-            assertTrue(loginResult.isFailure)
-            val loginErr = loginResult.exceptionOrNull()
-            assertTrue(loginErr is IllegalStateException)
-            assertTrue(loginErr?.message?.contains("Firebase is not configured") == true)
-
-            val googleResult = backend.loginWithGoogle("test_token")
-            assertTrue(googleResult.isFailure)
-            val googleErr = googleResult.exceptionOrNull()
-            assertTrue(googleErr is IllegalStateException)
-            assertTrue(googleErr?.message?.contains("Firebase is not configured") == true)
-        }
+    fun testFirebaseAppInitializationAndConfig() {
+        val app = FortApp.ensureFirebaseInitialized(context)
+        assertNotNull(app)
+        assertEquals("fort-chat-f3308", app?.options?.projectId)
+        assertEquals("1:259638681713:android:fc6d3434e8a1e0a149bbd0", app?.options?.applicationId)
+        assertEquals("AIzaSyBfwt2kxbyyBthxnPYgvWpR_yjcS5u-VE8", app?.options?.apiKey)
     }
 
     @Test

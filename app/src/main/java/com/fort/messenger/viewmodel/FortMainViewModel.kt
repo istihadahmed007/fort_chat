@@ -403,20 +403,27 @@ class FortMainViewModel @JvmOverloads constructor(
     }
 
     fun sendPhoneOtp(phoneNumber: String, activity: Activity? = null) {
-        if (phoneNumber.isBlank()) {
+        val raw = phoneNumber.trim().replace(" ", "").replace("-", "")
+        if (raw.isBlank()) {
             _uiState.update { it.copy(authErrorMessage = "Enter a valid mobile number.") }
             return
         }
+        val formattedNumber = when {
+            raw.startsWith("+") -> raw
+            raw.startsWith("01") && raw.length == 11 -> "+88$raw"
+            raw.startsWith("880") -> "+$raw"
+            else -> "+$raw"
+        }
         _uiState.update { it.copy(isAuthLoading = true, authErrorMessage = null) }
         viewModelScope.launch {
-            val result = repository.sendPhoneOtp(phoneNumber, activity)
+            val result = repository.sendPhoneOtp(formattedNumber, activity)
             _uiState.update { it.copy(isAuthLoading = false) }
             if (result.isSuccess) {
                 val verId = result.getOrThrow()
                 _uiState.update {
                     it.copy(
                         authVerificationId = verId,
-                        toastMessage = "Verification code sent. Enter the SMS code to continue."
+                        toastMessage = "Verification code sent to $formattedNumber. Enter the SMS code to continue."
                     )
                 }
             } else {

@@ -33,9 +33,7 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
 
     private val appContext = context.applicationContext
     private val firebaseApp: FirebaseApp? by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
-        runCatching {
-            FirebaseApp.getApps(appContext).firstOrNull() ?: FirebaseApp.initializeApp(appContext)
-        }.getOrNull()
+        com.fort.messenger.FortApp.ensureFirebaseInitialized(appContext)
     }
     private val automaticPhoneCredential = AtomicReference<PhoneAuthCredential?>(null)
 
@@ -46,7 +44,7 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
         get() = FirebaseFirestore.getInstance(requireFirebaseApp())
 
     private fun requireFirebaseApp(): FirebaseApp {
-        return firebaseApp ?: throw IllegalStateException(
+        return firebaseApp ?: com.fort.messenger.FortApp.ensureFirebaseInitialized(appContext) ?: throw IllegalStateException(
             "Firebase is not configured. Add your real google-services.json to the app/ folder, " +
                 "enable Authentication providers and Cloud Firestore, then rebuild."
         )

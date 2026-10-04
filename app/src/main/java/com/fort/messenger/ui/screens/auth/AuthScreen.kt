@@ -459,18 +459,18 @@ fun AuthScreen(
                             "string",
                             activity.packageName
                         )
-                        if (clientIdResource == 0) {
-                            viewModel.showAuthError(
-                                "Google sign-in is not configured. Add your real Firebase google-services.json and Web OAuth client."
-                            )
+                        val serverClientId = if (clientIdResource != 0) {
+                            activity.getString(clientIdResource)
                         } else {
-                            authScope.launch {
-                                try {
-                                    val option = GetGoogleIdOption.Builder()
-                                        .setFilterByAuthorizedAccounts(false)
-                                        .setServerClientId(activity.getString(clientIdResource))
-                                        .setAutoSelectEnabled(false)
-                                        .build()
+                            "259638681713-nfiq3nu83pet376kd1q7hu4rav5lg64s.apps.googleusercontent.com"
+                        }
+                        authScope.launch {
+                            try {
+                                val option = GetGoogleIdOption.Builder()
+                                    .setFilterByAuthorizedAccounts(false)
+                                    .setServerClientId(serverClientId)
+                                    .setAutoSelectEnabled(false)
+                                    .build()
                                     val request = GetCredentialRequest.Builder()
                                         .addCredentialOption(option)
                                         .build()
@@ -489,8 +489,7 @@ fun AuthScreen(
                                 }
                             }
                         }
-                    }
-                },
+                    },
                 enabled = !uiState.isAuthLoading,
                 modifier = Modifier
                     .fillMaxWidth()
