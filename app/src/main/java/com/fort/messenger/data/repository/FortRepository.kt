@@ -1,5 +1,7 @@
 package com.fort.messenger.data.repository
 
+import android.app.Activity
+
 import com.fort.messenger.data.local.*
 import com.fort.messenger.data.remote.*
 import com.fort.messenger.model.CardType
@@ -144,8 +146,8 @@ class FortRepository(
         }
     }
 
-    suspend fun sendPhoneOtp(phoneNumber: String): Result<String> {
-        return remoteBackend.sendPhoneOtp(phoneNumber)
+    suspend fun sendPhoneOtp(phoneNumber: String, activity: Activity? = null): Result<String> {
+        return remoteBackend.sendPhoneOtp(phoneNumber, activity)
     }
 
     suspend fun verifyPhoneOtp(verificationId: String, code: String, displayName: String): Result<UserAccountEntity> {
@@ -179,6 +181,7 @@ class FortRepository(
     }
 
     suspend fun logout() {
+        remoteBackend.signOut()
         database.userAccountDao().clearAccount()
     }
 
