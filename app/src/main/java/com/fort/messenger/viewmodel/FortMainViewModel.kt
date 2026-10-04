@@ -1,5 +1,6 @@
 package com.fort.messenger.viewmodel
 
+import android.app.Activity
 import android.app.Application
 import android.graphics.Bitmap
 import androidx.fragment.app.FragmentActivity
@@ -401,21 +402,21 @@ class FortMainViewModel(
         }
     }
 
-    fun sendPhoneOtp(phoneNumber: String) {
+    fun sendPhoneOtp(phoneNumber: String, activity: Activity? = null) {
         if (phoneNumber.isBlank()) {
             _uiState.update { it.copy(authErrorMessage = "Enter a valid mobile number.") }
             return
         }
         _uiState.update { it.copy(isAuthLoading = true, authErrorMessage = null) }
         viewModelScope.launch {
-            val result = repository.sendPhoneOtp(phoneNumber)
+            val result = repository.sendPhoneOtp(phoneNumber, activity)
             _uiState.update { it.copy(isAuthLoading = false) }
             if (result.isSuccess) {
                 val verId = result.getOrThrow()
                 _uiState.update {
                     it.copy(
                         authVerificationId = verId,
-                        toastMessage = "OTP dispatched. Use 739281 in development."
+                        toastMessage = "Verification code sent. Enter the SMS code to continue."
                     )
                 }
             } else {
@@ -482,10 +483,21 @@ class FortMainViewModel(
             _uiState.update { it.copy(authErrorMessage = "Enter email for password recovery.") }
             return
         }
+        _uiState.update { it.copy(isAuthLoading = true, authErrorMessage = null) }
         viewModelScope.launch {
-            repository.sendPasswordReset(email)
-            _uiState.update { it.copy(toastMessage = "If an account exists, recovery instructions have been dispatched.") }
+            val result = repository.sendPasswordReset(email)
+            _uiState.update { it.copy(isAuthLoading = false) }
+            if (result.isSuccess) {
+                _uiState.update { it.copy(toastMessage = "If an account exists, recovery instructions have been dispatched.") }
+            } else {
+                val err = result.exceptionOrNull()?.message ?: "Could not send recovery instructions."
+                _uiState.update { it.copy(authErrorMessage = err, toastMessage = err) }
+            }
         }
+    }
+
+    fun showAuthError(message: String) {
+        _uiState.update { it.copy(authErrorMessage = message, toastMessage = message) }
     }
 
     fun logout() {
