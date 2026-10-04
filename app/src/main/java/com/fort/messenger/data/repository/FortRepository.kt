@@ -4,8 +4,7 @@ import android.app.Activity
 
 import com.fort.messenger.data.local.*
 import com.fort.messenger.data.remote.*
-import com.fort.messenger.model.CardType
-import com.fort.messenger.model.PassDurationType
+import com.fort.messenger.model.*
 import com.fort.messenger.security.FortCryptoManager
 import com.fort.messenger.security.IdentityKeyPair
 import com.fort.messenger.security.KeyStoreMaster
@@ -251,12 +250,28 @@ class FortRepository(
             timestamp = "Just now",
             status = "PENDING"
         )
+        val remoteRes = remoteBackend.submitKnockFirstRequest(request)
+        if (remoteRes.isFailure) return remoteRes
+
         database.knockFirstDao().insertRequest(request)
         return Result.success(Unit)
     }
 
+    suspend fun syncInboundKnockFirstRequests(recipientUserId: String): Result<Int> {
+        val remoteRes = remoteBackend.fetchKnockFirstRequests(recipientUserId)
+        if (remoteRes.isFailure) return Result.failure(remoteRes.exceptionOrNull()!!)
+        val remoteList = remoteRes.getOrThrow()
+        var newCount = 0
+        for (req in remoteList) {
+            database.knockFirstDao().insertRequest(req)
+            newCount++
+        }
+        return Result.success(newCount)
+    }
+
     suspend fun acceptRequestOnce(request: KnockFirstRequestEntity, currentUserId: String): Result<Unit> {
         database.knockFirstDao().updateRequestStatus(request.requestId, "ACCEPTED")
+        remoteBackend.updateKnockFirstStatus(request.requestId, "ACCEPTED", currentUserId)
 
         val peerKeyResult = remoteBackend.fetchPublicKey(request.senderUserId, request.senderCardType.name)
         val peerPublicKey = peerKeyResult.getOrDefault("")
@@ -288,6 +303,7 @@ class FortRepository(
 
     suspend fun grantRequestSevenDays(request: KnockFirstRequestEntity, currentUserId: String): Result<Unit> {
         database.knockFirstDao().updateRequestStatus(request.requestId, "ACCEPTED")
+        remoteBackend.updateKnockFirstStatus(request.requestId, "ACCEPTED", currentUserId)
 
         val peerKeyResult = remoteBackend.fetchPublicKey(request.senderUserId, request.senderCardType.name)
         val peerPublicKey = peerKeyResult.getOrDefault("")
@@ -317,12 +333,16 @@ class FortRepository(
         return Result.success(Unit)
     }
 
-    suspend fun declineRequest(requestId: String) {
+    suspend fun declineRequest(requestId: String, currentUserId: String = "") {
         database.knockFirstDao().updateRequestStatus(requestId, "DECLINED")
+        if (currentUserId.isNotBlank()) {
+            remoteBackend.updateKnockFirstStatus(requestId, "DECLINED", currentUserId)
+        }
     }
 
     suspend fun blockAndReportRequest(request: KnockFirstRequestEntity, currentUserId: String) {
         database.knockFirstDao().updateRequestStatus(request.requestId, "BLOCKED")
+        remoteBackend.updateKnockFirstStatus(request.requestId, "BLOCKED", currentUserId)
         remoteBackend.blockUser(currentUserId, request.senderUserId)
     }
 
@@ -853,5 +873,173 @@ class FortRepository(
         val updatedJson = tasksArray.toString()
         database.privateRoomDao().updateRoomTasks(roomId, updatedJson)
         return Result.success(Unit)
+    }
+
+    // --- User Discovery & Search ---
+
+    suspend fun searchUsers(
+        query: String,
+        mode: SearchMode,
+        requesterUserId: String
+    ): Result<List<UserSearchResult>> {
+        val remoteResult = remoteBackend.searchUsers(query, mode, requesterUserId)
+        if (remoteResult.isFailure) return remoteResult
+        val list = remoteResult.getOrThrow()
+
+        val activeConnections = database.peerConnectionDao().getActiveConnections(requesterUserId).firstOrNull() ?: emptyList()
+        val connectedPeerIds = activeConnections.map { it.peerUserId }.toSet()
+
+        val mapped = list.map {
+            it.copy(isExistingConnection = connectedPeerIds.contains(it.userId))
+        }
+        return Result.success(mapped)
+    }
+
+    suspend fun updateUserDiscoveryPrivacy(
+        userId: String,
+        discoverableByName: Boolean,
+        discoverableByPhone: Boolean
+    ): Result<Unit> {
+        return remoteBackend.updateUserDiscoveryPrivacy(userId, discoverableByName, discoverableByPhone)
+    }
+
+    // --- WebRTC Audio & Video Call Signaling ---
+
+    suspend fun createCall(call: RemoteCallRecord): Result<Unit> {
+        return remoteBackend.createCall(call)
+    }
+
+    suspend fun updateCallStatus(callId: String, status: String, requesterUserId: String): Result<Unit> {
+        return remoteBackend.updateCallStatus(callId, status, requesterUserId)
+    }
+
+    suspend fun setCallOffer(callId: String, sdp: String, requesterUserId: String): Result<Unit> {
+        return remoteBackend.setCallOffer(callId, sdp, requesterUserId)
+    }
+
+    suspend fun setCallAnswer(callId: String, sdp: String, requesterUserId: String): Result<Unit> {
+        return remoteBackend.setCallAnswer(callId, sdp, requesterUserId)
+    }
+
+    suspend fun sendCallIceCandidate(
+        callId: String,
+        candidate: RtcIceCandidateRecord,
+        isCaller: Boolean,
+        requesterUserId: String
+    ): Result<Unit> {
+        return remoteBackend.sendCallIceCandidate(callId, candidate, isCaller, requesterUserId)
+    }
+
+    fun listenToCall(callId: String): Flow<RemoteCallRecord?> {
+        return remoteBackend.listenToCall(callId)
+    }
+
+    fun listenToIncomingCalls(userId: String): Flow<RemoteCallRecord?> {
+        return remoteBackend.listenToIncomingCalls(userId)
+    }
+
+    fun listenToCallCandidates(callId: String, isCaller: Boolean): Flow<List<RtcIceCandidateRecord>> {
+        return remoteBackend.listenToCallCandidates(callId, isCaller)
+    }
+
+    // --- Ephemeral Private Location Sharing ---
+
+    suspend fun sendLocationPin(
+        conversationId: String,
+        senderUserId: String,
+        recipientUserId: String,
+        pin: LocationPin
+    ): Result<ChatMessageEntity> {
+        val labelStr = pin.label?.let { " - $it" } ?: ""
+        val text = "📍 Shared Location Pin: ${pin.latitude}, ${pin.longitude}$labelStr"
+        return sendEncryptedMessage(
+            conversationId = conversationId,
+            senderUserId = senderUserId,
+            recipientUserId = recipientUserId,
+            plaintext = text
+        )
+    }
+
+    suspend fun startLiveLocationSharing(
+        senderUserId: String,
+        senderDisplayName: String,
+        recipientUserId: String,
+        duration: LiveLocationDuration,
+        initialLat: Double,
+        initialLng: Double,
+        accuracy: Float = 0f
+    ): Result<LiveLocationSession> {
+        val now = System.currentTimeMillis()
+        val session = LiveLocationSession(
+            shareId = "loc_${UUID.randomUUID()}",
+            senderUserId = senderUserId,
+            senderDisplayName = senderDisplayName,
+            recipientUserId = recipientUserId,
+            latitude = initialLat,
+            longitude = initialLng,
+            accuracyMeters = accuracy,
+            startedAt = now,
+            expiresAt = now + duration.durationMillis,
+            isStopped = false,
+            lastUpdated = now
+        )
+        val publishResult = remoteBackend.publishLiveLocation(session)
+        if (publishResult.isFailure) return Result.failure(publishResult.exceptionOrNull()!!)
+
+        // Send encrypted notification message
+        sendEncryptedMessage(
+            conversationId = "conv_${recipientUserId}",
+            senderUserId = senderUserId,
+            recipientUserId = recipientUserId,
+            plaintext = "🛰️ Started sharing live location (${duration.label})"
+        )
+
+        return Result.success(session)
+    }
+
+    suspend fun updateLiveLocation(
+        shareId: String,
+        senderUserId: String,
+        senderDisplayName: String,
+        recipientUserId: String,
+        lat: Double,
+        lng: Double,
+        accuracy: Float,
+        startedAt: Long,
+        expiresAt: Long
+    ): Result<Unit> {
+        val session = LiveLocationSession(
+            shareId = shareId,
+            senderUserId = senderUserId,
+            senderDisplayName = senderDisplayName,
+            recipientUserId = recipientUserId,
+            latitude = lat,
+            longitude = lng,
+            accuracyMeters = accuracy,
+            startedAt = startedAt,
+            expiresAt = expiresAt,
+            isStopped = false,
+            lastUpdated = System.currentTimeMillis()
+        )
+        return remoteBackend.publishLiveLocation(session)
+    }
+
+    suspend fun stopLiveLocationSharing(
+        shareId: String,
+        requesterUserId: String,
+        recipientUserId: String
+    ): Result<Unit> {
+        val res = remoteBackend.stopLiveLocation(shareId, requesterUserId)
+        sendEncryptedMessage(
+            conversationId = "conv_${recipientUserId}",
+            senderUserId = requesterUserId,
+            recipientUserId = recipientUserId,
+            plaintext = "🛑 Stopped sharing live location"
+        )
+        return res
+    }
+
+    suspend fun fetchActiveLiveLocation(senderUserId: String, recipientUserId: String): Result<LiveLocationSession?> {
+        return remoteBackend.fetchActiveLiveLocation(senderUserId, recipientUserId)
     }
 }

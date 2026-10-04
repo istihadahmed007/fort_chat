@@ -30,11 +30,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.fort.messenger.ui.modals.CallScreenModal
 import com.fort.messenger.ui.modals.ContactPassGeneratorSheet
+import com.fort.messenger.ui.modals.LocationShareBottomSheet
 import com.fort.messenger.ui.modals.MoodRingBottomSheet
 import com.fort.messenger.ui.modals.NewChatBottomSheet
 import com.fort.messenger.ui.modals.PassClaimPreviewDialog
 import com.fort.messenger.ui.modals.PassScannerModal
+import com.fort.messenger.ui.modals.SearchPeopleModal
 import com.fort.messenger.ui.screens.chat.ConversationScreen
 import com.fort.messenger.ui.screens.chats.ChatsHomeScreen
 import com.fort.messenger.ui.screens.circles.CirclesRoomsScreen
@@ -167,7 +170,9 @@ fun FortNavGraph(
                 viewModel.generateNewPass(cardType, duration)
             },
             generatedQrBitmap = uiState.generatedPassQrBitmap,
-            activePass = uiState.activeGeneratedPass
+            activePass = uiState.activeGeneratedPass,
+            isGenerating = uiState.isGeneratingPass,
+            errorMessage = uiState.passGenerationError
         )
     }
 
@@ -176,9 +181,23 @@ fun FortNavGraph(
             onDismissRequest = { viewModel.closeNewChatMenu() },
             onScanInvitation = { viewModel.openPassScanner() },
             onCreateInvitation = { viewModel.openPassGenerator() },
-            onFindByFortId = {
-                currentDestination = FortDestination.REQUESTS
-            }
+            onFindByFortId = { viewModel.openSearchPeople() }
+        )
+    }
+
+    if (uiState.isSearchPeopleOpen) {
+        SearchPeopleModal(
+            onDismissRequest = { viewModel.closeSearchPeople() },
+            onSearch = { query, mode -> viewModel.searchPeople(query, mode) },
+            searchResults = uiState.searchResults,
+            isSearching = uiState.isSearchingPeople,
+            searchError = uiState.searchPeopleError,
+            onOpenChat = { peerUserId ->
+                viewModel.closeSearchPeople()
+                currentDestination = FortDestination.CHATS
+                viewModel.openChat("conv_$peerUserId")
+            },
+            onKnockFirst = { user, intro -> viewModel.sendKnockFirstRequest(user, intro) }
         )
     }
 
@@ -196,6 +215,33 @@ fun FortNavGraph(
             errorMessage = uiState.passClaimError,
             onAccept = { viewModel.claimScannedPass(uiState.scannedPassPayload!!) },
             onDismiss = { viewModel.dismissScannedPassPreview() }
+        )
+    }
+
+    if (uiState.activeCallSession != null || uiState.incomingCallSession != null) {
+        val session = uiState.activeCallSession ?: uiState.incomingCallSession!!
+        val isIncoming = uiState.incomingCallSession != null && uiState.activeCallSession == null
+        CallScreenModal(
+            session = session,
+            isIncomingPrompt = isIncoming,
+            webrtcManager = viewModel.webrtcManager,
+            onAcceptCall = { viewModel.acceptIncomingCall() },
+            onDeclineCall = { viewModel.declineIncomingCall() },
+            onEndCall = { viewModel.endCall() },
+            onToggleMute = { viewModel.toggleMute() },
+            onToggleSpeaker = { viewModel.toggleSpeaker() },
+            onToggleVideo = { viewModel.toggleVideo() },
+            onSwitchCamera = { viewModel.switchCamera() }
+        )
+    }
+
+    if (uiState.isLocationShareModalOpen) {
+        LocationShareBottomSheet(
+            onDismissRequest = { viewModel.closeLocationShareModal() },
+            activeLiveSession = uiState.activeLiveLocation,
+            onSendStaticPin = { lat, lng, label -> viewModel.sendLocationPin(lat, lng, label) },
+            onStartLiveShare = { duration, lat, lng -> viewModel.startLiveLocationSharing(duration, lat, lng) },
+            onStopLiveShare = { viewModel.stopLiveLocationSharing() }
         )
     }
 }

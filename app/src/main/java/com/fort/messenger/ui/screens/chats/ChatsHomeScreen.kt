@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.outlined.PersonSearch
 import androidx.compose.material.icons.outlined.QrCode
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material3.Badge
@@ -184,13 +185,29 @@ fun ChatsHomeScreen(
                             )
                             Spacer(modifier = Modifier.height(18.dp))
 
+                            androidx.compose.material3.Button(
+                                onClick = { viewModel.openSearchPeople() },
+                                colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                androidx.compose.material3.Icon(
+                                    imageVector = Icons.Outlined.PersonSearch,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Find People to Chat", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                androidx.compose.material3.Button(
+                                androidx.compose.material3.OutlinedButton(
                                     onClick = { viewModel.openPassScanner() },
-                                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
                                     shape = RoundedCornerShape(12.dp),
                                     modifier = Modifier.weight(1f)
                                 ) {

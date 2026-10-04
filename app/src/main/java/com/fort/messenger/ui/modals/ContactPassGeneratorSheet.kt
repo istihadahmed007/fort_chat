@@ -25,6 +25,7 @@ import androidx.compose.material.icons.outlined.QrCode
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -57,14 +58,15 @@ import com.fort.messenger.ui.theme.RoyalBluePrimary
 @Composable
 fun ContactPassGeneratorSheet(
     onDismissRequest: () -> Unit,
-    onGeneratePass: (CardType, PassDurationType) -> ContactPass?,
+    onGeneratePass: (CardType, PassDurationType) -> Unit,
     generatedQrBitmap: Bitmap? = null,
     activePass: ContactPass? = null,
+    isGenerating: Boolean = false,
+    errorMessage: String? = null,
     sheetState: SheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 ) {
     var selectedCardType by remember { mutableStateOf(CardType.PERSONAL) }
     var selectedDuration by remember { mutableStateOf(PassDurationType.SEVEN_DAYS) }
-    var localPass by remember { mutableStateOf<ContactPass?>(activePass) }
 
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
@@ -228,7 +230,25 @@ fun ContactPassGeneratorSheet(
                             .padding(8.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (generatedQrBitmap != null) {
+                        if (isGenerating) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                CircularProgressIndicator(
+                                    color = RoyalBluePrimary,
+                                    modifier = Modifier.size(36.dp),
+                                    strokeWidth = 3.dp
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "PUBLISHING TO ENCLAVE...",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF64748B)
+                                )
+                            }
+                        } else if (generatedQrBitmap != null) {
                             Image(
                                 bitmap = generatedQrBitmap.asImageBitmap(),
                                 contentDescription = "Scannable Contact Pass QR Code",
@@ -258,7 +278,7 @@ fun ContactPassGeneratorSheet(
                     Spacer(modifier = Modifier.height(10.dp))
 
                     Text(
-                        text = localPass?.token ?: activePass?.token ?: "Select duration & generate",
+                        text = activePass?.token ?: "Select duration & generate",
                         fontSize = 13.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
@@ -271,6 +291,24 @@ fun ContactPassGeneratorSheet(
                         text = "Encrypted Scannable QR Matrix (ZXing Verified)",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            if (errorMessage != null) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFFFEF2F2))
+                        .padding(10.dp)
+                ) {
+                    Text(
+                        text = errorMessage,
+                        fontSize = 11.sp,
+                        color = Color(0xFFDC2626),
+                        fontWeight = FontWeight.Medium
                     )
                 }
             }
@@ -302,20 +340,28 @@ fun ContactPassGeneratorSheet(
             ) {
                 Button(
                     onClick = {
-                        val pass = onGeneratePass(selectedCardType, selectedDuration)
-                        localPass = pass
+                        onGeneratePass(selectedCardType, selectedDuration)
                     },
+                    enabled = !isGenerating,
                     colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Icon(
-                        imageVector = Icons.Outlined.ContentCopy,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Generate Pass", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    if (isGenerating) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Outlined.ContentCopy,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Generate Pass", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
                 }
 
                 OutlinedButton(

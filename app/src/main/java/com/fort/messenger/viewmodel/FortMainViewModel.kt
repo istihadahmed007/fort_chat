@@ -18,6 +18,16 @@ import com.fort.messenger.security.SanitizationResult
 import com.fort.messenger.security.ScrubberReport
 import com.fort.messenger.security.ShareCheckScrubber
 import com.fort.messenger.ui.components.ChatFilter
+import com.fort.messenger.model.CallSession
+import com.fort.messenger.model.CallStatus
+import com.fort.messenger.model.CallType
+import com.fort.messenger.model.LiveLocationDuration
+import com.fort.messenger.model.LiveLocationSession
+import com.fort.messenger.model.LocationPin
+import com.fort.messenger.model.SearchMode
+import com.fort.messenger.model.UserSearchResult
+import com.fort.messenger.service.LiveLocationService
+import com.fort.messenger.webrtc.WebRtcCallManager
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import org.json.JSONArray
@@ -69,6 +79,21 @@ data class FortUiState(
     val isNewChatMenuOpen: Boolean = false,
     val isPrivacyCheckOpen: Boolean = false,
     val isShareCheckOpen: Boolean = false,
+    // User Discovery / Search People
+    val isSearchPeopleOpen: Boolean = false,
+    val isSearchingPeople: Boolean = false,
+    val searchResults: List<UserSearchResult> = emptyList(),
+    val searchPeopleError: String? = null,
+    val selectedUserForKnock: UserSearchResult? = null,
+    // WebRTC Calls
+    val activeCallSession: CallSession? = null,
+    val incomingCallSession: CallSession? = null,
+    // Location Sharing
+    val isLocationShareModalOpen: Boolean = false,
+    val activeLiveLocation: LiveLocationSession? = null,
+    // Pass Generation Status
+    val isGeneratingPass: Boolean = false,
+    val passGenerationError: String? = null,
     // Security & Preferences
     val isBiometricLockEnabled: Boolean = false,
     val isEnclaveLocked: Boolean = false,
@@ -90,6 +115,10 @@ class FortMainViewModel @JvmOverloads constructor(
     private val biometricManager = FortBiometricManager(application)
     private val _uiState = MutableStateFlow(FortUiState())
     val uiState: StateFlow<FortUiState> = _uiState.asStateFlow()
+
+    var webrtcManager: WebRtcCallManager? = null
+    private var activeCallJob: kotlinx.coroutines.Job? = null
+    private var iceCandidatesJob: kotlinx.coroutines.Job? = null
 
     init {
         initializeAccountAndData()
@@ -345,6 +374,27 @@ class FortMainViewModel @JvmOverloads constructor(
         viewModelScope.launch {
             repository.retryPendingOutbox()
         }
+
+        // 8. Observe incoming WebRTC calls
+        viewModelScope.launch {
+            repository.listenToIncomingCalls(userId).collect { call ->
+                if (call != null && call.status == "RINGING" && _uiState.value.activeCallSession == null) {
+                    val session = CallSession(
+                        callId = call.callId,
+                        peerUserId = call.callerUserId,
+                        peerDisplayName = call.callerDisplayName,
+                        isCaller = false,
+                        callType = if (call.callType == "VIDEO") CallType.VIDEO else CallType.AUDIO,
+                        status = CallStatus.INCOMING_RINGING
+                    )
+                    _uiState.update { it.copy(incomingCallSession = session) }
+                } else if (call != null && (call.status == "ENDED" || call.status == "DECLINED" || call.status == "BUSY")) {
+                    if (_uiState.value.incomingCallSession?.callId == call.callId) {
+                        _uiState.update { it.copy(incomingCallSession = null) }
+                    }
+                }
+            }
+        }
     }
 
     // --- Authentication Actions (Production Ready) ---
@@ -513,6 +563,8 @@ class FortMainViewModel @JvmOverloads constructor(
     }
 
     fun logout() {
+        teardownWebRtc()
+        LiveLocationService.stop(getApplication())
         viewModelScope.launch {
             repository.logout()
             _uiState.update {
@@ -522,6 +574,9 @@ class FortMainViewModel @JvmOverloads constructor(
                     activePasses = emptyList(),
                     inboundRequests = emptyList(),
                     currentOpenChatId = null,
+                    activeCallSession = null,
+                    incomingCallSession = null,
+                    activeLiveLocation = null,
                     toastMessage = "Signed out of Sovereign Enclave"
                 )
             }
@@ -673,9 +728,9 @@ class FortMainViewModel @JvmOverloads constructor(
         }
     }
 
-    fun generateNewPass(cardType: CardType, durationType: PassDurationType): ContactPass? {
-        val user = _uiState.value.currentUserAccount ?: return null
-        var createdPass: ContactPass? = null
+    fun generateNewPass(cardType: CardType, durationType: PassDurationType) {
+        val user = _uiState.value.currentUserAccount ?: return
+        _uiState.update { it.copy(isGeneratingPass = true, passGenerationError = null) }
         viewModelScope.launch {
             val result = repository.generatePass(
                 issuerUserId = user.userId,
@@ -706,20 +761,319 @@ class FortMainViewModel @JvmOverloads constructor(
                     timeRemainingString = durationType.label,
                     expiryTimestamp = p.expiresAt
                 )
-                createdPass = uiPass
                 _uiState.update {
                     it.copy(
+                        isGeneratingPass = false,
                         generatedPassQrBitmap = bitmap,
                         activeGeneratedPass = uiPass,
-                        toastMessage = "Contact Pass generated: ${p.token}"
+                        passGenerationError = null,
+                        toastMessage = "Contact Pass published: ${p.token}"
                     )
                 }
             } else {
                 val err = result.exceptionOrNull()?.message ?: "Failed to generate pass remotely."
+                _uiState.update {
+                    it.copy(
+                        isGeneratingPass = false,
+                        passGenerationError = err,
+                        toastMessage = err
+                    )
+                }
+            }
+        }
+    }
+
+    // --- User Discovery & Search People ---
+
+    fun openSearchPeople() = _uiState.update {
+        it.copy(isSearchPeopleOpen = true, isNewChatMenuOpen = false, searchResults = emptyList(), searchPeopleError = null)
+    }
+
+    fun closeSearchPeople() = _uiState.update {
+        it.copy(isSearchPeopleOpen = false, searchResults = emptyList(), searchPeopleError = null, selectedUserForKnock = null)
+    }
+
+    fun searchPeople(query: String, mode: SearchMode) {
+        val user = _uiState.value.currentUserAccount ?: return
+        _uiState.update { it.copy(isSearchingPeople = true, searchPeopleError = null) }
+        viewModelScope.launch {
+            val result = repository.searchUsers(query, mode, user.userId)
+            _uiState.update {
+                it.copy(
+                    isSearchingPeople = false,
+                    searchResults = result.getOrDefault(emptyList()),
+                    searchPeopleError = if (result.isFailure) result.exceptionOrNull()?.message ?: "Search failed" else null
+                )
+            }
+        }
+    }
+
+    fun selectUserForKnock(user: UserSearchResult?) = _uiState.update { it.copy(selectedUserForKnock = user) }
+
+    fun sendKnockFirstRequest(targetUser: UserSearchResult, introMessage: String) {
+        val user = _uiState.value.currentUserAccount ?: return
+        viewModelScope.launch {
+            val card = _uiState.value.connectionCards.firstOrNull()
+            val result = repository.submitKnockFirstRequest(
+                recipientUserId = targetUser.userId,
+                senderUserId = user.userId,
+                senderDisplayName = card?.displayName ?: user.email.substringBefore("@"),
+                senderCardType = card?.type ?: CardType.PERSONAL,
+                source = "DISCOVERY_SEARCH",
+                rawMessage = introMessage.ifBlank { "Hello! I'd like to connect securely on Fort." },
+                sandboxedLink = null
+            )
+            if (result.isSuccess) {
+                _uiState.update {
+                    it.copy(
+                        selectedUserForKnock = null,
+                        isSearchPeopleOpen = false,
+                        toastMessage = "Knock First request sent to ${targetUser.displayName}."
+                    )
+                }
+            } else {
+                val err = result.exceptionOrNull()?.message ?: "Failed to send knock request."
                 _uiState.update { it.copy(toastMessage = err) }
             }
         }
-        return createdPass
+    }
+
+    // --- WebRTC Audio & Video Calling ---
+
+    fun startCall(peerUserId: String, peerDisplayName: String, callType: CallType) {
+        val user = _uiState.value.currentUserAccount ?: return
+        viewModelScope.launch {
+            val myName = _uiState.value.connectionCards.firstOrNull()?.displayName ?: user.email.substringBefore("@")
+            val callId = "call_${UUID.randomUUID()}"
+            val record = RemoteCallRecord(
+                callId = callId,
+                callerUserId = user.userId,
+                callerDisplayName = myName,
+                receiverUserId = peerUserId,
+                callType = callType.name,
+                status = "RINGING"
+            )
+            val result = repository.createCall(record)
+            if (result.isSuccess) {
+                val session = CallSession(
+                    callId = callId,
+                    peerUserId = peerUserId,
+                    peerDisplayName = peerDisplayName,
+                    isCaller = true,
+                    callType = callType,
+                    status = CallStatus.OUTGOING_RINGING
+                )
+                _uiState.update { it.copy(activeCallSession = session) }
+                initWebRtcForCall(session, isInitiator = true)
+            } else {
+                val err = result.exceptionOrNull()?.message ?: "Could not start call."
+                _uiState.update { it.copy(toastMessage = err) }
+            }
+        }
+    }
+
+    fun acceptIncomingCall() {
+        val user = _uiState.value.currentUserAccount ?: return
+        val incoming = _uiState.value.incomingCallSession ?: return
+        _uiState.update {
+            it.copy(
+                incomingCallSession = null,
+                activeCallSession = incoming.copy(status = CallStatus.CONNECTING)
+            )
+        }
+        viewModelScope.launch {
+            repository.updateCallStatus(incoming.callId, "ACCEPTED", user.userId)
+            initWebRtcForCall(incoming, isInitiator = false)
+        }
+    }
+
+    fun declineIncomingCall() {
+        val user = _uiState.value.currentUserAccount ?: return
+        val incoming = _uiState.value.incomingCallSession ?: return
+        _uiState.update { it.copy(incomingCallSession = null) }
+        viewModelScope.launch {
+            repository.updateCallStatus(incoming.callId, "DECLINED", user.userId)
+        }
+    }
+
+    fun endCall() {
+        val user = _uiState.value.currentUserAccount
+        val active = _uiState.value.activeCallSession
+        if (active != null && user != null) {
+            viewModelScope.launch {
+                repository.updateCallStatus(active.callId, "ENDED", user.userId)
+            }
+        }
+        teardownWebRtc()
+        _uiState.update { it.copy(activeCallSession = null, incomingCallSession = null) }
+    }
+
+    fun toggleMute() {
+        val isMuted = webrtcManager?.toggleMute() ?: false
+        _uiState.update { state ->
+            state.copy(activeCallSession = state.activeCallSession?.copy(isMuted = isMuted))
+        }
+    }
+
+    fun toggleSpeaker() {
+        val isSpeaker = webrtcManager?.toggleSpeakerphone() ?: false
+        _uiState.update { state ->
+            state.copy(activeCallSession = state.activeCallSession?.copy(isSpeakerOn = isSpeaker))
+        }
+    }
+
+    fun toggleVideo() {
+        val current = _uiState.value.activeCallSession?.isVideoEnabled ?: true
+        val newVideo = !current
+        webrtcManager?.toggleVideo(newVideo)
+        _uiState.update { state ->
+            state.copy(activeCallSession = state.activeCallSession?.copy(isVideoEnabled = newVideo))
+        }
+    }
+
+    fun switchCamera() {
+        webrtcManager?.switchCamera()
+    }
+
+    private fun initWebRtcForCall(session: CallSession, isInitiator: Boolean) {
+        val user = _uiState.value.currentUserAccount ?: return
+        teardownWebRtc()
+        val manager = WebRtcCallManager(
+            context = getApplication(),
+            onIceCandidateGenerated = { candidate ->
+                viewModelScope.launch {
+                    repository.sendCallIceCandidate(session.callId, candidate, isInitiator, user.userId)
+                }
+            },
+            onCallConnected = {
+                viewModelScope.launch {
+                    repository.updateCallStatus(session.callId, "ACCEPTED", user.userId)
+                    _uiState.update { it.copy(activeCallSession = it.activeCallSession?.copy(status = CallStatus.CONNECTED)) }
+                }
+            },
+            onCallDisconnected = { _ ->
+                endCall()
+            }
+        )
+        webrtcManager = manager
+        manager.init()
+        manager.startLocalMedia(session.callType)
+        manager.createPeerConnection()
+
+        activeCallJob = viewModelScope.launch {
+            repository.listenToCall(session.callId).collect { remoteCall ->
+                if (remoteCall == null || remoteCall.status == "ENDED" || remoteCall.status == "DECLINED") {
+                    endCall()
+                    return@collect
+                }
+                if (isInitiator && remoteCall.answerSdp != null && _uiState.value.activeCallSession?.status != CallStatus.CONNECTED) {
+                    manager.setRemoteAnswer(remoteCall.answerSdp)
+                } else if (!isInitiator && remoteCall.offerSdp != null && _uiState.value.activeCallSession?.status == CallStatus.CONNECTING) {
+                    manager.createAnswer(remoteCall.offerSdp) { answerDesc ->
+                        viewModelScope.launch {
+                            repository.setCallAnswer(session.callId, answerDesc.description, user.userId)
+                        }
+                    }
+                }
+            }
+        }
+
+        iceCandidatesJob = viewModelScope.launch {
+            repository.listenToCallCandidates(session.callId, !isInitiator).collect { candidateList ->
+                candidateList.forEach { candidate ->
+                    manager.addRemoteIceCandidate(candidate)
+                }
+            }
+        }
+
+        if (isInitiator) {
+            manager.createOffer { offerDesc ->
+                viewModelScope.launch {
+                    repository.setCallOffer(session.callId, offerDesc.description, user.userId)
+                    repository.updateCallStatus(session.callId, "RINGING", user.userId)
+                }
+            }
+        }
+    }
+
+    private fun teardownWebRtc() {
+        activeCallJob?.cancel()
+        activeCallJob = null
+        iceCandidatesJob?.cancel()
+        iceCandidatesJob = null
+        webrtcManager?.close()
+        webrtcManager = null
+    }
+
+    // --- Private Location Sharing ---
+
+    fun openLocationShareModal() = _uiState.update { it.copy(isLocationShareModalOpen = true) }
+    fun closeLocationShareModal() = _uiState.update { it.copy(isLocationShareModalOpen = false) }
+
+    fun sendLocationPin(latitude: Double, longitude: Double, label: String = "Pinned Location") {
+        val user = _uiState.value.currentUserAccount ?: return
+        val chatId = _uiState.value.currentOpenChatId ?: return
+        val peerUserId = chatId.removePrefix("conv_")
+        val pin = LocationPin(latitude, longitude, label)
+
+        viewModelScope.launch {
+            repository.sendEncryptedMessage(
+                conversationId = chatId,
+                senderUserId = user.userId,
+                recipientUserId = peerUserId,
+                plaintext = "📍 Location Pin: ${pin.toLocationMessageText()}",
+                attachmentType = "LOCATION_PIN",
+                attachmentName = "${pin.latitude},${pin.longitude}"
+            )
+            _uiState.update { it.copy(isLocationShareModalOpen = false, toastMessage = "Location pin shared.") }
+        }
+    }
+
+    fun startLiveLocationSharing(duration: LiveLocationDuration, latitude: Double, longitude: Double) {
+        val user = _uiState.value.currentUserAccount ?: return
+        val chatId = _uiState.value.currentOpenChatId ?: return
+        val peerUserId = chatId.removePrefix("conv_")
+        val myName = _uiState.value.connectionCards.firstOrNull()?.displayName ?: user.email.substringBefore("@")
+
+        viewModelScope.launch {
+            val result = repository.startLiveLocationSharing(
+                senderUserId = user.userId,
+                senderDisplayName = myName,
+                recipientUserId = peerUserId,
+                duration = duration,
+                initialLat = latitude,
+                initialLng = longitude
+            )
+            if (result.isSuccess) {
+                val session = result.getOrThrow()
+                _uiState.update {
+                    it.copy(
+                        activeLiveLocation = session,
+                        isLocationShareModalOpen = false,
+                        toastMessage = "Live location sharing started (${duration.label})."
+                    )
+                }
+                LiveLocationService.start(getApplication(), session.shareId, user.userId, myName, peerUserId, session.expiresAt)
+            } else {
+                val err = result.exceptionOrNull()?.message ?: "Failed to start live location."
+                _uiState.update { it.copy(toastMessage = err) }
+            }
+        }
+    }
+
+    fun stopLiveLocationSharing() {
+        val user = _uiState.value.currentUserAccount ?: return
+        val session = _uiState.value.activeLiveLocation ?: return
+        viewModelScope.launch {
+            repository.stopLiveLocationSharing(session.shareId, user.userId, session.recipientUserId)
+            LiveLocationService.stop(getApplication())
+            _uiState.update {
+                it.copy(
+                    activeLiveLocation = null,
+                    toastMessage = "Live location sharing stopped."
+                )
+            }
+        }
     }
 
     fun revokePass(passId: String) {

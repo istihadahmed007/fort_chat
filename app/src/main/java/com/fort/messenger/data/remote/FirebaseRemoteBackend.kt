@@ -16,10 +16,15 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
+import com.fort.messenger.data.local.KnockFirstRequestEntity
+import com.fort.messenger.model.*
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
@@ -78,11 +83,18 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
             ?: user.displayName?.takeIf { it.isNotBlank() }
             ?: previous.getString("displayName")?.takeIf { it.isNotBlank() }
             ?: email.substringBefore("@").ifBlank { "Fort member" }
+        val fortId = previous.getString("fortId")
+            ?: "@${displayName.lowercase().replace(" ", "").replace("@", "")}.fort"
+        val discoverableByName = previous.getBoolean("discoverableByName") ?: true
+        val discoverableByPhone = previous.getBoolean("discoverableByPhone") ?: true
         val profile = mutableMapOf<String, Any?>(
             "userId" to user.uid,
             "email" to email,
             "phoneNumber" to user.phoneNumber,
             "displayName" to displayName,
+            "fortId" to fortId,
+            "discoverableByName" to discoverableByName,
+            "discoverableByPhone" to discoverableByPhone,
             "updatedAt" to System.currentTimeMillis()
         )
         if (!previous.exists()) profile["createdAt"] = System.currentTimeMillis()
@@ -92,7 +104,10 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
             email = email,
             passwordHash = "",
             phoneNumber = user.phoneNumber,
-            displayName = displayName
+            displayName = displayName,
+            fortId = fortId,
+            discoverableByName = discoverableByName,
+            discoverableByPhone = discoverableByPhone
         )
     }
 
@@ -419,6 +434,385 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
         } catch (_: Exception) {
             false
         }
+    }
+
+    override suspend fun searchUsers(
+        query: String,
+        mode: SearchMode,
+        requesterUserId: String
+    ): Result<List<UserSearchResult>> = capture {
+        requireCaller(requesterUserId)
+        val trimmed = query.trim()
+        if (trimmed.isBlank()) return@capture emptyList()
+
+        when (mode) {
+            SearchMode.NAME -> {
+                val snapshot = firestore.collection("users")
+                    .whereGreaterThanOrEqualTo("displayName", trimmed)
+                    .whereLessThanOrEqualTo("displayName", trimmed + "\uf8ff")
+                    .limit(20)
+                    .get()
+                    .await()
+
+                snapshot.documents.mapNotNull { doc ->
+                    val uid = doc.getString("userId") ?: doc.id
+                    val dName = doc.getString("displayName") ?: return@mapNotNull null
+                    val discoverable = doc.getBoolean("discoverableByName") ?: true
+                    if (uid == requesterUserId || !discoverable) return@mapNotNull null
+
+                    val fortId = doc.getString("fortId") ?: "@${dName.lowercase().replace(" ", "")}.fort"
+                    UserSearchResult(
+                        userId = uid,
+                        displayName = dName,
+                        fortId = fortId,
+                        avatarEmoji = "🛡️",
+                        isExistingConnection = false,
+                        hasVerifiedPhone = doc.getString("phoneNumber") != null
+                    )
+                }
+            }
+            SearchMode.FORT_ID -> {
+                val cleanFortId = if (trimmed.startsWith("@")) trimmed else "@$trimmed"
+                val snapshot = firestore.collection("users")
+                    .whereEqualTo("fortId", cleanFortId.lowercase())
+                    .limit(1)
+                    .get()
+                    .await()
+
+                val doc = snapshot.documents.firstOrNull() ?: firestore.collection("users").document(trimmed).get().await()
+                if (!doc.exists()) emptyList()
+                else {
+                    val uid = doc.getString("userId") ?: doc.id
+                    val dName = doc.getString("displayName") ?: "Sovereign User"
+                    if (uid == requesterUserId) emptyList()
+                    else listOf(
+                        UserSearchResult(
+                            userId = uid,
+                            displayName = dName,
+                            fortId = doc.getString("fortId") ?: cleanFortId,
+                            avatarEmoji = "🛡️",
+                            isExistingConnection = false,
+                            hasVerifiedPhone = doc.getString("phoneNumber") != null
+                        )
+                    )
+                }
+            }
+            SearchMode.PHONE -> {
+                val myPhone = auth.currentUser?.phoneNumber
+                if (myPhone.isNullOrBlank()) {
+                    throw IllegalStateException("Phone verification is required before you can discover peers by phone.")
+                }
+                val normalized = PhoneDiscoveryHelper.normalizeToE164(trimmed)
+                    ?: throw IllegalArgumentException("Invalid phone number format. Include country code (e.g. +1234567890).")
+
+                val snapshot = firestore.collection("users")
+                    .whereEqualTo("phoneNumber", normalized)
+                    .limit(1)
+                    .get()
+                    .await()
+
+                val doc = snapshot.documents.firstOrNull()
+                if (doc == null || !doc.exists()) emptyList()
+                else {
+                    val uid = doc.getString("userId") ?: doc.id
+                    val discoverable = doc.getBoolean("discoverableByPhone") ?: true
+                    val dName = doc.getString("displayName") ?: "Sovereign User"
+                    if (uid == requesterUserId || !discoverable) emptyList()
+                    else listOf(
+                        UserSearchResult(
+                            userId = uid,
+                            displayName = dName,
+                            fortId = doc.getString("fortId") ?: "@${dName.lowercase().replace(" ", "")}.fort",
+                            avatarEmoji = "🛡️",
+                            isExistingConnection = false,
+                            hasVerifiedPhone = true
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    override suspend fun updateUserDiscoveryPrivacy(
+        userId: String,
+        discoverableByName: Boolean,
+        discoverableByPhone: Boolean
+    ): Result<Unit> = capture {
+        requireCaller(userId)
+        firestore.collection("users").document(userId).update(
+            mapOf(
+                "discoverableByName" to discoverableByName,
+                "discoverableByPhone" to discoverableByPhone,
+                "updatedAt" to System.currentTimeMillis()
+            )
+        ).await()
+        Unit
+    }
+
+    override suspend fun submitKnockFirstRequest(request: KnockFirstRequestEntity): Result<Unit> = capture {
+        requireCaller(request.senderUserId)
+        firestore.collection("knock_first").document(request.requestId).set(
+            mapOf(
+                "requestId" to request.requestId,
+                "senderUserId" to request.senderUserId,
+                "recipientUserId" to request.recipientUserId,
+                "senderDisplayName" to request.senderDisplayName,
+                "senderCardType" to request.senderCardType.name,
+                "source" to request.source,
+                "rawMessage" to request.rawMessage,
+                "sandboxedLink" to request.sandboxedLink,
+                "timestamp" to request.timestamp,
+                "status" to request.status
+            )
+        ).await()
+        Unit
+    }
+
+    override suspend fun fetchKnockFirstRequests(recipientUserId: String): Result<List<KnockFirstRequestEntity>> = capture {
+        requireCaller(recipientUserId)
+        val snapshot = firestore.collection("knock_first")
+            .whereEqualTo("recipientUserId", recipientUserId)
+            .whereEqualTo("status", "PENDING")
+            .get()
+            .await()
+        snapshot.documents.mapNotNull { doc ->
+            val reqId = doc.getString("requestId") ?: doc.id
+            val sender = doc.getString("senderUserId") ?: return@mapNotNull null
+            val senderName = doc.getString("senderDisplayName") ?: "Peer"
+            val cardType = try {
+                CardType.valueOf(doc.getString("senderCardType") ?: "PERSONAL")
+            } catch (_: Exception) { CardType.PERSONAL }
+            KnockFirstRequestEntity(
+                requestId = reqId,
+                recipientUserId = recipientUserId,
+                senderUserId = sender,
+                senderDisplayName = senderName,
+                senderCardType = cardType,
+                source = doc.getString("source") ?: "FORT_ID",
+                rawMessage = doc.getString("rawMessage") ?: "",
+                sandboxedLink = doc.getString("sandboxedLink"),
+                timestamp = doc.getString("timestamp") ?: System.currentTimeMillis().toString(),
+                status = doc.getString("status") ?: "PENDING"
+            )
+        }
+    }
+
+    override suspend fun updateKnockFirstStatus(
+        requestId: String,
+        status: String,
+        recipientUserId: String
+    ): Result<Unit> = capture {
+        requireCaller(recipientUserId)
+        firestore.collection("knock_first").document(requestId)
+            .update("status", status)
+            .await()
+        Unit
+    }
+
+    override suspend fun createCall(call: RemoteCallRecord): Result<Unit> = capture {
+        requireCaller(call.callerUserId)
+        firestore.collection("calls").document(call.callId).set(
+            mapOf(
+                "callId" to call.callId,
+                "callerUserId" to call.callerUserId,
+                "callerDisplayName" to call.callerDisplayName,
+                "receiverUserId" to call.receiverUserId,
+                "callType" to call.callType,
+                "status" to call.status,
+                "offerSdp" to call.offerSdp,
+                "answerSdp" to call.answerSdp,
+                "createdAt" to call.createdAt,
+                "updatedAt" to call.updatedAt
+            )
+        ).await()
+        Unit
+    }
+
+    override suspend fun updateCallStatus(callId: String, status: String, requesterUserId: String): Result<Unit> = capture {
+        requireSignedInUserId()
+        firestore.collection("calls").document(callId).update(
+            mapOf(
+                "status" to status,
+                "updatedAt" to System.currentTimeMillis()
+            )
+        ).await()
+        Unit
+    }
+
+    override suspend fun setCallOffer(callId: String, sdp: String, requesterUserId: String): Result<Unit> = capture {
+        requireSignedInUserId()
+        firestore.collection("calls").document(callId).update(
+            mapOf(
+                "offerSdp" to sdp,
+                "updatedAt" to System.currentTimeMillis()
+            )
+        ).await()
+        Unit
+    }
+
+    override suspend fun setCallAnswer(callId: String, sdp: String, requesterUserId: String): Result<Unit> = capture {
+        requireSignedInUserId()
+        firestore.collection("calls").document(callId).update(
+            mapOf(
+                "answerSdp" to sdp,
+                "status" to "ACCEPTED",
+                "updatedAt" to System.currentTimeMillis()
+            )
+        ).await()
+        Unit
+    }
+
+    override suspend fun sendCallIceCandidate(
+        callId: String,
+        candidate: RtcIceCandidateRecord,
+        isCaller: Boolean,
+        requesterUserId: String
+    ): Result<Unit> = capture {
+        requireSignedInUserId()
+        firestore.collection("calls").document(callId).collection("candidates").add(
+            mapOf(
+                "candidate" to candidate.candidate,
+                "sdpMid" to candidate.sdpMid,
+                "sdpMLineIndex" to candidate.sdpMLineIndex,
+                "isCaller" to isCaller,
+                "timestamp" to System.currentTimeMillis()
+            )
+        ).await()
+        Unit
+    }
+
+    override fun listenToCall(callId: String): Flow<RemoteCallRecord?> = callbackFlow {
+        val listener = firestore.collection("calls").document(callId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null || snapshot == null || !snapshot.exists()) {
+                    trySend(null)
+                    return@addSnapshotListener
+                }
+                val record = RemoteCallRecord(
+                    callId = snapshot.getString("callId") ?: snapshot.id,
+                    callerUserId = snapshot.getString("callerUserId") ?: "",
+                    callerDisplayName = snapshot.getString("callerDisplayName") ?: "Peer",
+                    receiverUserId = snapshot.getString("receiverUserId") ?: "",
+                    callType = snapshot.getString("callType") ?: "AUDIO",
+                    status = snapshot.getString("status") ?: "RINGING",
+                    offerSdp = snapshot.getString("offerSdp"),
+                    answerSdp = snapshot.getString("answerSdp"),
+                    createdAt = snapshot.getLong("createdAt") ?: 0L,
+                    updatedAt = snapshot.getLong("updatedAt") ?: 0L
+                )
+                trySend(record)
+            }
+        awaitClose { listener.remove() }
+    }
+
+    override fun listenToIncomingCalls(userId: String): Flow<RemoteCallRecord?> = callbackFlow {
+        val listener = firestore.collection("calls")
+            .whereEqualTo("receiverUserId", userId)
+            .whereEqualTo("status", "RINGING")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null || snapshot == null || snapshot.isEmpty) {
+                    trySend(null)
+                    return@addSnapshotListener
+                }
+                val doc = snapshot.documents.firstOrNull()
+                if (doc != null) {
+                    val record = RemoteCallRecord(
+                        callId = doc.getString("callId") ?: doc.id,
+                        callerUserId = doc.getString("callerUserId") ?: "",
+                        callerDisplayName = doc.getString("callerDisplayName") ?: "Peer",
+                        receiverUserId = doc.getString("receiverUserId") ?: "",
+                        callType = doc.getString("callType") ?: "AUDIO",
+                        status = doc.getString("status") ?: "RINGING",
+                        offerSdp = doc.getString("offerSdp"),
+                        answerSdp = doc.getString("answerSdp"),
+                        createdAt = doc.getLong("createdAt") ?: 0L,
+                        updatedAt = doc.getLong("updatedAt") ?: 0L
+                    )
+                    trySend(record)
+                } else {
+                    trySend(null)
+                }
+            }
+        awaitClose { listener.remove() }
+    }
+
+    override fun listenToCallCandidates(callId: String, isCaller: Boolean): Flow<List<RtcIceCandidateRecord>> = callbackFlow {
+        val listener = firestore.collection("calls").document(callId).collection("candidates")
+            .whereEqualTo("isCaller", isCaller)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null || snapshot == null) {
+                    trySend(emptyList())
+                    return@addSnapshotListener
+                }
+                val list = snapshot.documents.mapNotNull { d ->
+                    val cand = d.getString("candidate") ?: return@mapNotNull null
+                    val mid = d.getString("sdpMid") ?: ""
+                    val line = (d.get("sdpMLineIndex") as? Number)?.toInt() ?: 0
+                    RtcIceCandidateRecord(candidate = cand, sdpMid = mid, sdpMLineIndex = line)
+                }
+                trySend(list)
+            }
+        awaitClose { listener.remove() }
+    }
+
+    override suspend fun publishLiveLocation(session: LiveLocationSession): Result<Unit> = capture {
+        requireCaller(session.senderUserId)
+        firestore.collection("live_locations").document(session.shareId).set(
+            mapOf(
+                "shareId" to session.shareId,
+                "senderUserId" to session.senderUserId,
+                "senderDisplayName" to session.senderDisplayName,
+                "recipientUserId" to session.recipientUserId,
+                "latitude" to session.latitude,
+                "longitude" to session.longitude,
+                "accuracyMeters" to session.accuracyMeters,
+                "startedAt" to session.startedAt,
+                "expiresAt" to session.expiresAt,
+                "isStopped" to session.isStopped,
+                "lastUpdated" to session.lastUpdated
+            ),
+            SetOptions.merge()
+        ).await()
+        Unit
+    }
+
+    override suspend fun stopLiveLocation(shareId: String, requesterUserId: String): Result<Unit> = capture {
+        requireSignedInUserId()
+        firestore.collection("live_locations").document(shareId).update(
+            mapOf(
+                "isStopped" to true,
+                "lastUpdated" to System.currentTimeMillis()
+            )
+        ).await()
+        Unit
+    }
+
+    override suspend fun fetchActiveLiveLocation(senderUserId: String, recipientUserId: String): Result<LiveLocationSession?> = capture {
+        requireSignedInUserId()
+        val now = System.currentTimeMillis()
+        val snapshot = firestore.collection("live_locations")
+            .whereEqualTo("senderUserId", senderUserId)
+            .whereEqualTo("recipientUserId", recipientUserId)
+            .whereEqualTo("isStopped", false)
+            .whereGreaterThan("expiresAt", now)
+            .limit(1)
+            .get()
+            .await()
+
+        val doc = snapshot.documents.firstOrNull() ?: return@capture null
+        LiveLocationSession(
+            shareId = doc.getString("shareId") ?: doc.id,
+            senderUserId = doc.getString("senderUserId") ?: "",
+            senderDisplayName = doc.getString("senderDisplayName") ?: "Contact",
+            recipientUserId = doc.getString("recipientUserId") ?: "",
+            latitude = doc.getDouble("latitude") ?: 0.0,
+            longitude = doc.getDouble("longitude") ?: 0.0,
+            accuracyMeters = (doc.get("accuracyMeters") as? Number)?.toFloat() ?: 0f,
+            startedAt = doc.getLong("startedAt") ?: 0L,
+            expiresAt = doc.getLong("expiresAt") ?: 0L,
+            isStopped = doc.getBoolean("isStopped") ?: false,
+            lastUpdated = doc.getLong("lastUpdated") ?: 0L
+        )
     }
 
     private fun RemotePassRecord.toFirestoreMap(): Map<String, Any?> = mapOf(

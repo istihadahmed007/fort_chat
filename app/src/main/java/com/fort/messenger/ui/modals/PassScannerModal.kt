@@ -343,10 +343,22 @@ fun ManualTokenEntryView(
 private fun decodeImageProxy(image: ImageProxy): String? {
     val plane = image.planes.firstOrNull() ?: return null
     val buffer: ByteBuffer = plane.buffer
-    val data = ByteArray(buffer.remaining())
-    buffer.get(data)
     val width = image.width
     val height = image.height
+    val rowStride = plane.rowStride
+
+    val data = ByteArray(width * height)
+    val rowBuffer = ByteArray(rowStride)
+
+    for (row in 0 until height) {
+        val position = row * rowStride
+        if (position + width <= buffer.capacity()) {
+            buffer.position(position)
+            val bytesToRead = minOf(rowStride, buffer.remaining())
+            buffer.get(rowBuffer, 0, bytesToRead)
+            System.arraycopy(rowBuffer, 0, data, row * width, width)
+        }
+    }
 
     return try {
         val source = PlanarYUVLuminanceSource(

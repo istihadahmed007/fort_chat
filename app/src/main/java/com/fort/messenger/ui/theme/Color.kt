@@ -43,3 +43,10 @@ val PersonaPersonal = Color(0xFF2563EB)
 val PersonaWork = Color(0xFF0284C7)
 val PersonaTravel = Color(0xFF0D9488)
 val PersonaMarketplace = Color(0xFFD97706)
+
+// Liquid-Glass Frost Tokens
+val IceGlassLight = Color(0xEBF4F9FF)
+val IceGlassDark = Color(0xEB111B2E)
+val IceGlassBorderLight = Color(0x80BFDBFE)
+val IceGlassBorderDark = Color(0x4D60A5FA)
+val LiquidGlassHighlight = Color(0x40FFFFFF)

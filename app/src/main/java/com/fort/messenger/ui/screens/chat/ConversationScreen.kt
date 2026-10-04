@@ -22,9 +22,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.fort.messenger.model.CallType
 import com.fort.messenger.model.ChatMessage
+import com.fort.messenger.model.LocationPin
 import com.fort.messenger.ui.components.ConnectionCardBadge
 import com.fort.messenger.ui.components.MoodRingBadge
 import com.fort.messenger.ui.components.PassCountdownChip
@@ -133,6 +136,32 @@ fun ConversationScreen(
                         )
                     }
 
+                    // Audio Call Button
+                    IconButton(onClick = {
+                        val peerUserId = conversationId.removePrefix("conv_")
+                        viewModel.startCall(peerUserId, conversation.participantName, CallType.AUDIO)
+                    }) {
+                        Icon(
+                            imageVector = Icons.Outlined.Call,
+                            contentDescription = "Audio Call",
+                            tint = RoyalBluePrimary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+
+                    // Video Call Button
+                    IconButton(onClick = {
+                        val peerUserId = conversationId.removePrefix("conv_")
+                        viewModel.startCall(peerUserId, conversation.participantName, CallType.VIDEO)
+                    }) {
+                        Icon(
+                            imageVector = Icons.Outlined.Videocam,
+                            contentDescription = "Video Call",
+                            tint = RoyalBluePrimary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+
                     // In-chat Search Toggle Button
                     IconButton(onClick = {
                         isSearchActive = !isSearchActive
@@ -179,6 +208,43 @@ fun ConversationScreen(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(10.dp)
                         )
+                    }
+                }
+
+                // Active Live Location Sharing Indicator Banner
+                val activeLive = uiState.activeLiveLocation
+                if (activeLive != null && !activeLive.isStopped) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(EmeraldVerified.copy(alpha = 0.12f))
+                            .border(width = 0.5.dp, color = EmeraldVerified.copy(alpha = 0.3f))
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Outlined.LocationOn,
+                                contentDescription = null,
+                                tint = EmeraldVerified,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Sharing live location with peer",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = EmeraldVerified
+                            )
+                        }
+
+                        TextButton(
+                            onClick = { viewModel.stopLiveLocationSharing() },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Text("Stop", color = Color(0xFFE11D48), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
@@ -269,6 +335,14 @@ fun ConversationScreen(
                             onClick = {
                                 showAttachmentMenu = false
                                 viewModel.openShareCheck()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Share Private Location (Pin / Live)") },
+                            leadingIcon = { Icon(Icons.Outlined.LocationOn, contentDescription = null, tint = RoyalBluePrimary) },
+                            onClick = {
+                                showAttachmentMenu = false
+                                viewModel.openLocationShareModal()
                             }
                         )
                         DropdownMenuItem(
@@ -621,6 +695,7 @@ fun ChatMessageBubble(
     modifier: Modifier = Modifier
 ) {
     val isMine = message.isMine
+    val context = LocalContext.current
     val bubbleColor = if (isMine) RoyalBluePrimary else MaterialTheme.colorScheme.surface
     val textColor = if (isMine) Color.White else MaterialTheme.colorScheme.onSurface
     val timeColor = if (isMine) Color(0xFFDBEAFE) else MaterialTheme.colorScheme.onSurfaceVariant
@@ -678,8 +753,66 @@ fun ChatMessageBubble(
                     Spacer(modifier = Modifier.height(6.dp))
                 }
 
-                // File or Media Attachment Header
-                if (message.attachmentType != null) {
+                // Location Pin or Media Attachment Header
+                if (message.attachmentType == "LOCATION_PIN") {
+                    val coords = message.attachmentName?.split(",") ?: emptyList()
+                    val lat = coords.getOrNull(0)?.trim()?.toDoubleOrNull()
+                    val lng = coords.getOrNull(1)?.trim()?.toDoubleOrNull()
+
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (isMine) Color(0xFF1E3A8A) else Color(0xFFEFF6FF))
+                            .padding(10.dp)
+                    ) {
+                        Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Outlined.LocationOn,
+                                    contentDescription = null,
+                                    tint = if (isMine) Color(0xFF38BDF8) else RoyalBluePrimary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Location Pin",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isMine) Color.White else RoyalBluePrimary
+                                )
+                            }
+                            if (lat != null && lng != null) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "GPS: %.4f, %.4f".format(lat, lng),
+                                    fontSize = 11.sp,
+                                    color = if (isMine) Color(0xFFDBEAFE) else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Button(
+                                    onClick = {
+                                        LocationPin(lat, lng, "Fort Location Pin").openInMapsApp(context)
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (isMine) Color(0xFF2563EB) else RoyalBluePrimary
+                                    ),
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    modifier = Modifier.height(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.LocationOn,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Open in Maps", fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                } else if (message.attachmentType != null) {
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))

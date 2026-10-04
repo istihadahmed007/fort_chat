@@ -1,8 +1,13 @@
 package com.fort.messenger.data.remote
 
 import android.app.Activity
-
 import android.util.Base64
+import com.fort.messenger.data.local.KnockFirstRequestEntity
+import com.fort.messenger.model.*
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -15,6 +20,9 @@ data class RemoteUserAccount(
     val passwordHash: String,
     val phoneNumber: String? = null,
     val displayName: String = "",
+    val fortId: String = "",
+    var discoverableByName: Boolean = true,
+    var discoverableByPhone: Boolean = true,
     val publicKeys: MutableMap<String, String> = ConcurrentHashMap() // cardType -> publicKeyBase64
 )
 
@@ -86,6 +94,30 @@ interface FortRemoteBackend {
     suspend fun leaveRoom(roomId: String, userId: String): Result<Unit>
     suspend fun blockUser(blockerUserId: String, blockedUserId: String): Result<Unit>
     suspend fun isBlocked(potentialSenderId: String, targetRecipientId: String): Boolean
+
+    // --- User Discovery & Privacy Controls ---
+    suspend fun searchUsers(query: String, mode: SearchMode, requesterUserId: String): Result<List<UserSearchResult>>
+    suspend fun updateUserDiscoveryPrivacy(userId: String, discoverableByName: Boolean, discoverableByPhone: Boolean): Result<Unit>
+
+    // --- Knock First Server Sync ---
+    suspend fun submitKnockFirstRequest(request: KnockFirstRequestEntity): Result<Unit>
+    suspend fun fetchKnockFirstRequests(recipientUserId: String): Result<List<KnockFirstRequestEntity>>
+    suspend fun updateKnockFirstStatus(requestId: String, status: String, recipientUserId: String): Result<Unit>
+
+    // --- WebRTC Audio & Video Call Signaling ---
+    suspend fun createCall(call: RemoteCallRecord): Result<Unit>
+    suspend fun updateCallStatus(callId: String, status: String, requesterUserId: String): Result<Unit>
+    suspend fun setCallOffer(callId: String, sdp: String, requesterUserId: String): Result<Unit>
+    suspend fun setCallAnswer(callId: String, sdp: String, requesterUserId: String): Result<Unit>
+    suspend fun sendCallIceCandidate(callId: String, candidate: RtcIceCandidateRecord, isCaller: Boolean, requesterUserId: String): Result<Unit>
+    fun listenToCall(callId: String): Flow<RemoteCallRecord?>
+    fun listenToIncomingCalls(userId: String): Flow<RemoteCallRecord?>
+    fun listenToCallCandidates(callId: String, isCaller: Boolean): Flow<List<RtcIceCandidateRecord>>
+
+    // --- Ephemeral Private Live Location Sharing ---
+    suspend fun publishLiveLocation(session: LiveLocationSession): Result<Unit>
+    suspend fun stopLiveLocation(shareId: String, requesterUserId: String): Result<Unit>
+    suspend fun fetchActiveLiveLocation(senderUserId: String, recipientUserId: String): Result<LiveLocationSession?>
 }
 
 /**
@@ -135,10 +167,13 @@ class InMemoryRemoteRelay : FortRemoteBackend {
         val salt = ByteArray(16).apply { secureRandom.nextBytes(this) }
         val passwordHash = hashPassword(password, salt)
         val userId = "usr_${java.util.UUID.randomUUID().toString().take(12)}"
+        val cleanName = displayName.ifBlank { cleanEmail.substringBefore("@") }
+        val fortId = "@${cleanName.lowercase().replace(" ", "").replace("@", "")}.fort"
         val user = RemoteUserAccount(
             userId = userId,
             email = cleanEmail,
-            displayName = displayName.ifBlank { cleanEmail.substringBefore("@") },
+            displayName = cleanName,
+            fortId = fortId,
             passwordHash = passwordHash
         )
         users[cleanEmail] = user
@@ -182,11 +217,14 @@ class InMemoryRemoteRelay : FortRemoteBackend {
         }
 
         val userId = "usr_phone_${phoneNumber.hashCode().toUInt()}"
+        val cleanName = displayName.ifBlank { "Phone User ${phoneNumber.takeLast(4)}" }
+        val fortId = "@user${phoneNumber.takeLast(4)}.fort"
         val user = RemoteUserAccount(
             userId = userId,
             email = "$phoneNumber@phone.fort",
             phoneNumber = phoneNumber,
-            displayName = displayName.ifBlank { "Phone User ${phoneNumber.takeLast(4)}" },
+            displayName = cleanName,
+            fortId = fortId,
             passwordHash = "OTP_AUTHENTICATED"
         )
         usersByPhone[phoneNumber] = user
@@ -384,6 +422,215 @@ class InMemoryRemoteRelay : FortRemoteBackend {
         return blocklists[targetRecipientId]?.contains(potentialSenderId) == true
     }
 
+    private val knockFirstRequests = ConcurrentHashMap<String, KnockFirstRequestEntity>()
+    private val activeCalls = ConcurrentHashMap<String, RemoteCallRecord>()
+    private val callCandidates = ConcurrentHashMap<String, MutableList<Pair<Boolean, RtcIceCandidateRecord>>>()
+    private val liveLocations = ConcurrentHashMap<String, LiveLocationSession>()
+    private val incomingCallFlows = ConcurrentHashMap<String, MutableStateFlow<RemoteCallRecord?>>()
+    private val callStateFlows = ConcurrentHashMap<String, MutableStateFlow<RemoteCallRecord?>>()
+    private val candidateFlows = ConcurrentHashMap<String, MutableStateFlow<List<RtcIceCandidateRecord>>>()
+
+    override suspend fun searchUsers(query: String, mode: SearchMode, requesterUserId: String): Result<List<UserSearchResult>> {
+        val trimmed = query.trim()
+        if (trimmed.isBlank()) return Result.success(emptyList())
+
+        return when (mode) {
+            SearchMode.NAME -> {
+                val matches = usersById.values
+                    .filter { it.userId != requesterUserId && it.discoverableByName && it.displayName.contains(trimmed, ignoreCase = true) }
+                    .map {
+                        UserSearchResult(
+                            userId = it.userId,
+                            displayName = it.displayName,
+                            fortId = it.fortId.ifBlank { "@${it.displayName.lowercase().replace(" ", "")}.fort" },
+                            avatarEmoji = "🛡️",
+                            isExistingConnection = false,
+                            hasVerifiedPhone = it.phoneNumber != null,
+                            publicKey = it.publicKeys.values.firstOrNull() ?: ""
+                        )
+                    }
+                Result.success(matches)
+            }
+            SearchMode.FORT_ID -> {
+                val cleanFortId = if (trimmed.startsWith("@")) trimmed else "@$trimmed"
+                val match = usersById.values.firstOrNull {
+                    it.userId != requesterUserId && (it.fortId.equals(cleanFortId, ignoreCase = true) ||
+                        it.fortId.equals(trimmed, ignoreCase = true) ||
+                        it.userId.equals(trimmed, ignoreCase = true))
+                }
+                if (match != null) {
+                    Result.success(listOf(
+                        UserSearchResult(
+                            userId = match.userId,
+                            displayName = match.displayName,
+                            fortId = match.fortId.ifBlank { cleanFortId },
+                            avatarEmoji = "🛡️",
+                            isExistingConnection = false,
+                            hasVerifiedPhone = match.phoneNumber != null,
+                            publicKey = match.publicKeys.values.firstOrNull() ?: ""
+                        )
+                    ))
+                } else {
+                    Result.success(emptyList())
+                }
+            }
+            SearchMode.PHONE -> {
+                val requester = usersById[requesterUserId]
+                if (requester?.phoneNumber == null) {
+                    return Result.failure(IllegalStateException("Phone number verification is required before searching by phone."))
+                }
+                val normalized = PhoneDiscoveryHelper.normalizeToE164(trimmed)
+                    ?: return Result.failure(IllegalArgumentException("Invalid phone number format. Please enter an international phone number."))
+
+                val match = usersById.values.firstOrNull {
+                    it.userId != requesterUserId && it.discoverableByPhone && it.phoneNumber == normalized
+                }
+                if (match != null) {
+                    Result.success(listOf(
+                        UserSearchResult(
+                            userId = match.userId,
+                            displayName = match.displayName,
+                            fortId = match.fortId.ifBlank { "@${match.displayName.lowercase().replace(" ", "")}.fort" },
+                            avatarEmoji = "🛡️",
+                            isExistingConnection = false,
+                            hasVerifiedPhone = true,
+                            publicKey = match.publicKeys.values.firstOrNull() ?: ""
+                        )
+                    ))
+                } else {
+                    Result.success(emptyList())
+                }
+            }
+        }
+    }
+
+    override suspend fun updateUserDiscoveryPrivacy(
+        userId: String,
+        discoverableByName: Boolean,
+        discoverableByPhone: Boolean
+    ): Result<Unit> {
+        val user = usersById[userId] ?: return Result.failure(IllegalArgumentException("User not found."))
+        user.discoverableByName = discoverableByName
+        user.discoverableByPhone = discoverableByPhone
+        return Result.success(Unit)
+    }
+
+    override suspend fun submitKnockFirstRequest(request: KnockFirstRequestEntity): Result<Unit> {
+        if (isBlocked(request.senderUserId, request.recipientUserId)) {
+            return Result.failure(SecurityException("Sender is blocked by recipient."))
+        }
+        knockFirstRequests[request.requestId] = request
+        return Result.success(Unit)
+    }
+
+    override suspend fun fetchKnockFirstRequests(recipientUserId: String): Result<List<KnockFirstRequestEntity>> {
+        val list = knockFirstRequests.values
+            .filter { it.recipientUserId == recipientUserId && it.status == "PENDING" }
+            .sortedByDescending { it.timestamp }
+        return Result.success(list)
+    }
+
+    override suspend fun updateKnockFirstStatus(requestId: String, status: String, recipientUserId: String): Result<Unit> {
+        val req = knockFirstRequests[requestId] ?: return Result.failure(IllegalArgumentException("Request not found."))
+        if (req.recipientUserId != recipientUserId) {
+            return Result.failure(SecurityException("Only the recipient can update request status."))
+        }
+        knockFirstRequests[requestId] = req.copy(status = status)
+        return Result.success(Unit)
+    }
+
+    override suspend fun createCall(call: RemoteCallRecord): Result<Unit> {
+        if (isBlocked(call.callerUserId, call.receiverUserId)) {
+            return Result.failure(SecurityException("Cannot place call. User is blocked."))
+        }
+        activeCalls[call.callId] = call
+        val incomingFlow = incomingCallFlows.getOrPut(call.receiverUserId) { MutableStateFlow(null) }
+        incomingFlow.value = call
+        val callFlow = callStateFlows.getOrPut(call.callId) { MutableStateFlow(null) }
+        callFlow.value = call
+        return Result.success(Unit)
+    }
+
+    override suspend fun updateCallStatus(callId: String, status: String, requesterUserId: String): Result<Unit> {
+        val call = activeCalls[callId] ?: return Result.failure(IllegalArgumentException("Call not found."))
+        if (call.callerUserId != requesterUserId && call.receiverUserId != requesterUserId) {
+            return Result.failure(SecurityException("Not a participant in this call."))
+        }
+        val updated = call.copy(status = status, updatedAt = System.currentTimeMillis())
+        activeCalls[callId] = updated
+        callStateFlows[callId]?.value = updated
+        if (status in listOf("ENDED", "DECLINED", "BUSY")) {
+            incomingCallFlows[call.receiverUserId]?.value = null
+        }
+        return Result.success(Unit)
+    }
+
+    override suspend fun setCallOffer(callId: String, sdp: String, requesterUserId: String): Result<Unit> {
+        val call = activeCalls[callId] ?: return Result.failure(IllegalArgumentException("Call not found."))
+        val updated = call.copy(offerSdp = sdp, updatedAt = System.currentTimeMillis())
+        activeCalls[callId] = updated
+        callStateFlows[callId]?.value = updated
+        return Result.success(Unit)
+    }
+
+    override suspend fun setCallAnswer(callId: String, sdp: String, requesterUserId: String): Result<Unit> {
+        val call = activeCalls[callId] ?: return Result.failure(IllegalArgumentException("Call not found."))
+        val updated = call.copy(answerSdp = sdp, status = "ACCEPTED", updatedAt = System.currentTimeMillis())
+        activeCalls[callId] = updated
+        callStateFlows[callId]?.value = updated
+        incomingCallFlows[call.receiverUserId]?.value = null
+        return Result.success(Unit)
+    }
+
+    override suspend fun sendCallIceCandidate(
+        callId: String,
+        candidate: RtcIceCandidateRecord,
+        isCaller: Boolean,
+        requesterUserId: String
+    ): Result<Unit> {
+        val list = callCandidates.getOrPut(callId) { CopyOnWriteArrayList() }
+        list.add(Pair(isCaller, candidate))
+        val key = "${callId}_${isCaller}"
+        val flow = candidateFlows.getOrPut(key) { MutableStateFlow(emptyList()) }
+        flow.value = list.filter { it.first == isCaller }.map { it.second }
+        return Result.success(Unit)
+    }
+
+    override fun listenToCall(callId: String): Flow<RemoteCallRecord?> {
+        return callStateFlows.getOrPut(callId) { MutableStateFlow(activeCalls[callId]) }.asStateFlow()
+    }
+
+    override fun listenToIncomingCalls(userId: String): Flow<RemoteCallRecord?> {
+        return incomingCallFlows.getOrPut(userId) { MutableStateFlow(null) }.asStateFlow()
+    }
+
+    override fun listenToCallCandidates(callId: String, isCaller: Boolean): Flow<List<RtcIceCandidateRecord>> {
+        val key = "${callId}_${isCaller}"
+        val existing = callCandidates[callId]?.filter { it.first == isCaller }?.map { it.second } ?: emptyList()
+        return candidateFlows.getOrPut(key) { MutableStateFlow(existing) }.asStateFlow()
+    }
+
+    override suspend fun publishLiveLocation(session: LiveLocationSession): Result<Unit> {
+        liveLocations[session.shareId] = session
+        return Result.success(Unit)
+    }
+
+    override suspend fun stopLiveLocation(shareId: String, requesterUserId: String): Result<Unit> {
+        val loc = liveLocations[shareId] ?: return Result.success(Unit)
+        if (loc.senderUserId != requesterUserId) {
+            return Result.failure(SecurityException("Only the sender can stop live location sharing."))
+        }
+        liveLocations[shareId] = loc.copy(isStopped = true, lastUpdated = System.currentTimeMillis())
+        return Result.success(Unit)
+    }
+
+    override suspend fun fetchActiveLiveLocation(senderUserId: String, recipientUserId: String): Result<LiveLocationSession?> {
+        val session = liveLocations.values.find {
+            it.senderUserId == senderUserId && it.recipientUserId == recipientUserId && !it.isExpired
+        }
+        return Result.success(session)
+    }
+
     fun clearAllData() {
         users.clear()
         usersById.clear()
@@ -395,5 +642,12 @@ class InMemoryRemoteRelay : FortRemoteBackend {
         rooms.clear()
         blocklists.clear()
         phoneOtpSessions.clear()
+        knockFirstRequests.clear()
+        activeCalls.clear()
+        callCandidates.clear()
+        liveLocations.clear()
+        incomingCallFlows.clear()
+        callStateFlows.clear()
+        candidateFlows.clear()
     }
 }
