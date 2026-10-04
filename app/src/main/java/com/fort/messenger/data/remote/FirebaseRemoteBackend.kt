@@ -372,9 +372,13 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
         val reference = firestore.collection("rooms").document(roomId)
         firestore.runTransaction { transaction ->
             val snapshot = transaction.get(reference)
-            if (!snapshot.exists()) throw IllegalArgumentException("Room not found.")
+            val data = snapshot.data ?: throw IllegalArgumentException("Room not found.")
+            val members = data.stringList("members")
+            if (userId !in members) throw IllegalArgumentException("You are not a member of this room.")
             transaction.update(reference, "members", FieldValue.arrayRemove(userId))
-            transaction.update(reference, "adminIds", FieldValue.arrayRemove(userId))
+            if (userId in data.stringList("adminIds")) {
+                transaction.update(reference, "adminIds", FieldValue.arrayRemove(userId))
+            }
             Unit
         }.await()
         Unit
