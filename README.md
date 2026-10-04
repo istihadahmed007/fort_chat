@@ -125,13 +125,15 @@ FORT includes a factory (`FortBackendFactory`) that initializes real production 
 
 ### 6.1 Cloud Firestore / Firebase Setup
 1. Create a Firebase project in the [Firebase Console](https://console.firebase.google.com/).
-2. Enable **Cloud Firestore** and **Firebase Authentication** (Email/Password, Phone Auth, and Google Sign-In).
-3. Register your Android app with package name `com.fort.messenger`.
-4. Download your `google-services.json` and place it in the `app/` directory (see `app/google-services.json.example` for format).
-5. Apply the server-side security rules provided in [`firestore.rules`](file:///firestore.rules):
+2. Enable **Cloud Firestore** and the Authentication providers you intend to use: **Email/Password**, **Phone**, and **Google**.
+3. Register your Android app with package name `com.fort.messenger`. Add the debug/release SHA fingerprints requested by Firebase for Phone and Google sign-in.
+4. Download the real `google-services.json` for this app and place it at `app/google-services.json`. The checked-in `app/google-services.json.example` is intentionally fake and cannot connect to Firebase. The Google Services Gradle plugin is applied only when the real file exists, so source-only CI builds still work.
+5. Deploy the rules in [`firestore.rules`](https://github.com/istihadahmed007/fort_chat/blob/main/firestore.rules) to the same Firebase project:
    ```bash
    firebase deploy --only firestore:rules
    ```
+
+The app now uses Firebase Authentication and Cloud Firestore for production accounts and messaging. Without a valid `google-services.json`, cloud authentication and messaging report that setup is missing; they do not create demo accounts or show fake success. CI can compile and run local tests without your Firebase project, but it cannot verify live sign-in or cloud access.
 
 ### 6.2 Security Rules Overview (`firestore.rules`)
 * **Packets (`/packets/{packetId}`):** Only designated recipient can read ciphertext packets. Senders cannot read packets after transmission. Senders listed on the recipient's blocklist are rejected on the server.
