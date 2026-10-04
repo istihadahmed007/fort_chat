@@ -594,7 +594,7 @@ class FortRealProductionTest {
         assertNotNull(app)
         assertEquals("fort-chat-f3308", app?.options?.projectId)
         assertEquals("1:259638681713:android:fc6d3434e8a1e0a149bbd0", app?.options?.applicationId)
-        assertEquals("AIzaSyBfwt2kxbyyBthxnPYgvWpR_yjcS5u-VE8", app?.options?.apiKey)
+        assertEquals("AIzaSyBBD7aMf5z1OwJOt5HSGmW4RJxmcMi5nt0", app?.options?.apiKey)
     }
 
     @Test

@@ -29,7 +29,7 @@ class FortApp : Application() {
             return runCatching {
                 val options = FirebaseOptions.Builder()
                     .setApplicationId("1:259638681713:android:fc6d3434e8a1e0a149bbd0")
-                    .setApiKey("AIzaSyBfwt2kxbyyBthxnPYgvWpR_yjcS5u-VE8")
+                    .setApiKey("AIzaSyBBD7aMf5z1OwJOt5HSGmW4RJxmcMi5nt0")
                     .setProjectId("fort-chat-f3308")
                     .setStorageBucket("fort-chat-f3308.firebasestorage.app")
                     .setGcmSenderId("259638681713")
