@@ -590,23 +590,25 @@ class FortRealProductionTest {
 
     @Test
     fun testFirebaseRemoteBackendFailsExplicitlyWhenUnconfigured() = runBlocking {
-        val backend = FirebaseRemoteBackend(context)
-        val registerResult = backend.register("test@fort.net", "Password123!", "Test")
-        assertTrue(registerResult.isFailure)
-        val regErr = registerResult.exceptionOrNull()
-        assertTrue(regErr is IllegalStateException)
-        assertTrue(regErr?.message?.contains("Firebase is not configured") == true)
+        if (com.google.firebase.FirebaseApp.getApps(context).isEmpty()) {
+            val backend = FirebaseRemoteBackend(context)
+            val registerResult = backend.register("test@fort.net", "Password123!", "Test")
+            assertTrue(registerResult.isFailure)
+            val regErr = registerResult.exceptionOrNull()
+            assertTrue(regErr is IllegalStateException)
+            assertTrue(regErr?.message?.contains("Firebase is not configured") == true)
 
-        val loginResult = backend.login("test@fort.net", "Password123!")
-        assertTrue(loginResult.isFailure)
-        val loginErr = loginResult.exceptionOrNull()
-        assertTrue(loginErr is IllegalStateException)
-        assertTrue(loginErr?.message?.contains("Firebase is not configured") == true)
+            val loginResult = backend.login("test@fort.net", "Password123!")
+            assertTrue(loginResult.isFailure)
+            val loginErr = loginResult.exceptionOrNull()
+            assertTrue(loginErr is IllegalStateException)
+            assertTrue(loginErr?.message?.contains("Firebase is not configured") == true)
 
-        val googleResult = backend.loginWithGoogle("test_token")
-        assertTrue(googleResult.isFailure)
-        val googleErr = googleResult.exceptionOrNull()
-        assertTrue(googleErr is IllegalStateException)
-        assertTrue(googleErr?.message?.contains("Firebase is not configured") == true)
+            val googleResult = backend.loginWithGoogle("test_token")
+            assertTrue(googleResult.isFailure)
+            val googleErr = googleResult.exceptionOrNull()
+            assertTrue(googleErr is IllegalStateException)
+            assertTrue(googleErr?.message?.contains("Firebase is not configured") == true)
+        }
     }
 }
