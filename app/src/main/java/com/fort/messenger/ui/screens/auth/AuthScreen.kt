@@ -490,7 +490,8 @@ fun AuthScreen(
                             }
                         }
                     }
-                }
+                },
+                enabled = !uiState.isAuthLoading,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(48.dp),
