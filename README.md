@@ -47,9 +47,13 @@ The server relay (`FortRemoteBackend` / Cloud Firestore) functions strictly as a
 | Feature | Production Implementation |
 | :--- | :--- |
 | **Real Accounts & Persistence** | SQLite Room Database (`FortDatabase`, v2 with `MIGRATION_1_2`) with entities for `UserAccount`, `PersonaCard`, `PeerConnection`, `ChatMessage`, `KnockFirstRequest`, `ContactPass`, and `MoodRing`. Persists across app restarts and process kills without synthetic mock profiles. |
-| **Authentication Choices** | Clean onboarding supporting Email/Password, 6-digit Phone OTP verification, Google Sign-In, and self-service Password Reset recovery. |
+| **Authentication Choices** | Clean onboarding supporting Email/Password, 6-digit Phone OTP verification, Google Sign-In, and self-service Password Reset recovery. Branded with the 3D Fortress Shield icon. |
 | **Zero-Correlation Cards** | 4 distinct facets (Personal, Work, Travel, Marketplace) with isolated NIST P-256 ECDH public keys. Senders never discover whether the counterparty has other cards. |
-| **Contact Passes & QR Engine** | Generates real scannable 2D matrix QR codes (`com.google.zxing:core:3.5.3`). Supports atomic single-use tokens, duration boundaries, and deterministic revocation enforced by server authorization. |
+| **Camera QR Scanner & Pass Engine** | Live CameraX viewfinder (`PassScannerModal`) analyzing real-time camera frames with ZXing (`com.google.zxing:core:3.5.3`). Features manual token entry fallback, graceful camera permission denial handling, invalid/expired/revoked token handling, and offline error states. Generates scannable QR bitmaps. |
+| **Preview Before Connect** | Scanned invitations trigger a `PassClaimPreviewDialog` showing the inviter's persona card, access duration, and expiration timestamp. Connection requires explicit user confirmation via "Accept & Connect" or "Cancel". |
+| **Reciprocal Two-Way Connection** | Upon pass claim, claimant saves the peer connection and immediately transmits an authenticated, end-to-end encrypted sovereign handshake packet. When the issuer syncs inbound messages, a reciprocal connection is automatically established in their local database, placing the new conversation in both users' Chats screen. |
+| **Fail-Closed Pass Publishing** | If remote publishing fails (network failure, Firestore permission denial, or offline), the invitation is rejected immediately and is never saved to the local Room database as active or usable. |
+| **New Chat Actions & Empty State** | Chats screen features a prominent "New Chat" action sheet and empty state quick-action buttons offering "Scan QR Invitation", "Create Invitation Pass", and "Find by Fort ID". Top-bar QR action is wired directly to the live Camera scanner. |
 | **Knock First Sandbox** | Real queue holding untrusted incoming requests. Senders cannot call or trigger downloads. Triage actions (`Accept Once`, `Grant 7-Day`, `Decline`, `Block & Report`) update persistent connections and server blocklists. |
 | **Modern Conversation Flow** | In-conversation text search, quoted replies with preview banner, real-time emoji message reactions, message editing with `(edited)` indicator, message deletion ("This message was deleted"), delivery receipts (`PENDING` clock, `SENT` single tick, `DELIVERED` double tick, `READ` blue double tick), and multi-type attachment picker. |
 | **Offline Queue & Retry** | Outbound messages dispatched while offline are persisted in SQLite with `PENDING` status. Automatic outbox flush upon network reconnection and manual retry banner in conversation view. |
@@ -72,7 +76,7 @@ $env:Path = "$env:JAVA_HOME\bin;" + $env:Path
 .\gradlew.bat testDebugUnitTest --no-daemon
 ```
 
-### Verified Test Cases (22 Tests, 100% Pass Rate)
+### Verified Test Cases (25 Tests, 100% Pass Rate)
 
 #### Cryptographic & Security Verification:
 * `testEndToEndEncryptionBetweenAliceAndBob`: Alice encrypts, server stores only ciphertext (zero readable text), Bob decrypts on-device, unauthorized attacker Charlie fails.
@@ -82,6 +86,9 @@ $env:Path = "$env:JAVA_HOME\bin;" + $env:Path
 * `testContactPassSingleUseAndRevocationEnforcement`: Single-use pass claimed by Bob; subsequent claim rejected. Alice revokes pass; subsequent claim rejected.
 * `testAtomicSingleUsePassClaimConcurrently`: Concurrent multi-threaded pass claims are serialized atomically; exactly one claimant succeeds, second claimant is rejected.
 * `testServerSideBlocklistRejectsInboundMessages`: Server-side blocklist rejects unauthorized transmission attempts.
+* `testQrBitmapGenerationAndDecoding`: Real ZXing QR bitmap generation, 2D matrix rendering, and camera frame decoding via `QRCodeReader`.
+* `testTwoWayConnectionCreationAndMessaging`: Bob claims Alice's pass, transmits an E2EE greeting handshake; Alice syncs inbound messages and automatically creates the reciprocal peer connection, enabling two-way conversation.
+* `testPassPublishFailureDoesNotSaveLocalPass`: Remote publishing failure (e.g. offline/network failure) fails closed and does not store un-published passes in local SQLite storage.
 
 #### Messaging, Persistence & Room Management:
 * `testMessageReactionsEditAndDelete`: Real-time emoji reaction toggle, message edit state updates, and message deletion tombstones.
@@ -102,7 +109,7 @@ $env:Path = "$env:JAVA_HOME\bin;" + $env:Path
 * `testAllMoodTypesRepresented`: Ensures all 6 emotional states are present.
 * `testAllShareCheckRiskLevelsRepresented`: Ensures all risk severity levels are enforced.
 
-**Result:** `22 tests completed, 0 failures. BUILD SUCCESSFUL.`
+**Result:** `25 tests completed, 0 failures. BUILD SUCCESSFUL.`
 
 ---
 
