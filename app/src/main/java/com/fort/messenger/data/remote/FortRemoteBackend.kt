@@ -1,5 +1,7 @@
 package com.fort.messenger.data.remote
 
+import android.app.Activity
+
 import android.util.Base64
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
@@ -63,10 +65,11 @@ data class RemoteMoodRecord(
 interface FortRemoteBackend {
     suspend fun register(email: String, password: String, displayName: String = ""): Result<RemoteUserAccount>
     suspend fun login(email: String, password: String): Result<RemoteUserAccount>
-    suspend fun sendPhoneOtp(phoneNumber: String): Result<String>
+    suspend fun sendPhoneOtp(phoneNumber: String, activity: Activity? = null): Result<String>
     suspend fun verifyPhoneOtp(verificationId: String, code: String, displayName: String = ""): Result<RemoteUserAccount>
     suspend fun loginWithGoogle(idToken: String, displayName: String = ""): Result<RemoteUserAccount>
     suspend fun sendPasswordReset(email: String): Result<Unit>
+    suspend fun signOut(): Result<Unit>
     suspend fun publishPublicKey(userId: String, cardType: String, publicKey: String): Result<Unit>
     suspend fun fetchPublicKey(userId: String, cardType: String): Result<String>
     suspend fun publishPass(pass: RemotePassRecord): Result<Unit>
@@ -152,7 +155,7 @@ class InMemoryRemoteRelay : FortRemoteBackend {
         return Result.success(user)
     }
 
-    override suspend fun sendPhoneOtp(phoneNumber: String): Result<String> {
+    override suspend fun sendPhoneOtp(phoneNumber: String, activity: Activity?): Result<String> {
         val cleanPhone = phoneNumber.trim()
         if (cleanPhone.length < 7) {
             return Result.failure(IllegalArgumentException("Invalid phone number format."))
@@ -219,6 +222,8 @@ class InMemoryRemoteRelay : FortRemoteBackend {
         }
         return Result.success(Unit)
     }
+
+    override suspend fun signOut(): Result<Unit> = Result.success(Unit)
 
     override suspend fun publishPublicKey(userId: String, cardType: String, publicKey: String): Result<Unit> {
         val user = usersById[userId] ?: return Result.failure(IllegalArgumentException("User not found."))
