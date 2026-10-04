@@ -1,5 +1,14 @@
 package com.fort.messenger.ui.screens.auth
 
+import android.app.Activity
+import androidx.compose.ui.platform.LocalContext
+import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.GetCredentialException
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -45,6 +54,8 @@ fun AuthScreen(
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
+    val authScope = rememberCoroutineScope()
     var selectedTab by remember { mutableStateOf(AuthTab.SIGN_IN) }
 
     // Form inputs
@@ -365,7 +376,14 @@ fun AuthScreen(
                             Spacer(modifier = Modifier.height(10.dp))
 
                             OutlinedButton(
-                                onClick = { viewModel.sendPhoneOtp(phoneNumber) },
+                                onClick = {
+                                    val activity = context as? Activity
+                                    if (activity == null) {
+                                        viewModel.showAuthError("Phone verification needs an active app screen. Reopen sign-in and try again.")
+                                    } else {
+                                        viewModel.sendPhoneOtp(phoneNumber, activity)
+                                    }
+                                },
                                 enabled = !uiState.isAuthLoading && phoneNumber.isNotBlank(),
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(10.dp)
@@ -430,8 +448,41 @@ fun AuthScreen(
             // Google Sign In Button
             OutlinedButton(
                 onClick = {
-                    // Google sign-in dispatch with verified ID token
-                    viewModel.loginWithGoogle("GOOGLE_VERIFIED_IDENTITY_TOKEN", "Google Sovereign User")
+                    val clientIdResource = context.resources.getIdentifier(
+                        "default_web_client_id",
+                        "string",
+                        context.packageName
+                    )
+                    if (clientIdResource == 0) {
+                        viewModel.showAuthError(
+                            "Google sign-in is not configured. Add your real Firebase google-services.json and Web OAuth client."
+                        )
+                    } else {
+                        authScope.launch {
+                            try {
+                                val option = GetGoogleIdOption.Builder()
+                                    .setFilterByAuthorizedAccounts(false)
+                                    .setServerClientId(context.getString(clientIdResource))
+                                    .setAutoSelectEnabled(false)
+                                    .build()
+                                val request = GetCredentialRequest.Builder()
+                                    .addCredentialOption(option)
+                                    .build()
+                                val result = CredentialManager.create(context).getCredential(context, request)
+                                val credential = result.credential as? CustomCredential
+                                    ?: throw IllegalStateException("Google did not return an ID token credential.")
+                                if (credential.type != GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                                    throw IllegalStateException("Google returned an unsupported credential.")
+                                }
+                                val googleId = GoogleIdTokenCredential.createFrom(credential.data)
+                                viewModel.loginWithGoogle(googleId.idToken, googleId.displayName.orEmpty())
+                            } catch (error: GetCredentialException) {
+                                viewModel.showAuthError(error.message ?: "Google sign-in was cancelled or unavailable.")
+                            } catch (error: Exception) {
+                                viewModel.showAuthError(error.message ?: "Google sign-in failed.")
+                            }
+                        }
+                    }
                 },
                 modifier = Modifier
                     .fillMaxWidth()
