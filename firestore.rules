@@ -32,17 +32,25 @@ service cloud.firestore {
       }
     }
 
-    // Minimal Public Discovery Profiles (Safe fields only, no private emails or raw phone numbers)
+    // Minimal Public Discovery Profiles (Safe fields only, no private emails, raw phone numbers, or phone hashes)
     match /public_profiles/{userId} {
       allow read: if isAuthenticated();
-      allow write: if isOwner(userId);
+      allow write: if isOwner(userId) && !('phoneHash' in request.resource.data);
     }
 
-    // Unique Fort ID Registry
+    // Unique Fort ID Registry (Immutable reservation prevents ID squatting)
     match /fort_ids/{cleanFortId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated() 
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.fortId == cleanFortId;
+      allow update: if false;
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // Internal rate limits for phone lookup callable function
+    match /phone_lookup_limits/{limitId} {
+      allow read, write: if false;
     }
 
     // 2. End-to-End Encrypted Message Packets
@@ -80,7 +88,7 @@ service cloud.firestore {
     match /contact_passes/{passId} {
       allow read: if isAuthenticated() && (
         resource.data.issuerUserId == request.auth.uid || 
-        resource.data.claimantUserId == request.auth.uid
+        resource.data.get('claimantUserId', '') == request.auth.uid
       );
 
       allow create: if isAuthenticated() 
@@ -88,30 +96,20 @@ service cloud.firestore {
         && request.resource.data.isRevoked == false
         && request.resource.data.isClaimed == false;
 
+      // Direct client claims are disabled; claims must go through trusted claimContactPass callable function
       allow update: if isAuthenticated() && (
-        // Issuer can revoke
-        (resource.data.issuerUserId == request.auth.uid 
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRevoked']) 
-          && request.resource.data.isRevoked == true)
-        // Claimant can claim active, unclaimed, unexpired pass (atomic single-use enforcement)
-        || (
-          resource.data.isRevoked == false
-          && request.time.toMillis() < resource.data.expiresAt
-          && (!resource.data.isSingleUse || resource.data.isClaimed == false)
-          && (!resource.data.isClaimed || resource.data.claimantUserId == request.auth.uid)
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isClaimed', 'claimantUserId'])
-          && request.resource.data.isClaimed == true
-          && request.resource.data.claimantUserId == request.auth.uid
-          && !exists(/databases/$(database)/documents/users/$(resource.data.issuerUserId)/blocklist/$(request.auth.uid))
-        )
+        resource.data.issuerUserId == request.auth.uid 
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRevoked']) 
+        && request.resource.data.isRevoked == true
       );
 
       allow delete: if isAuthenticated() && resource.data.issuerUserId == request.auth.uid;
     }
 
-    // Secure Single-Use Pass Token Claims (Keyed by SHA-256 hash of token to prevent collection scraping)
+    // Secure Single-Use Pass Token Records (Tokens hashed with SHA-256)
+    // Direct client reading and claiming disabled; claims handled exclusively by callable Cloud Function
     match /pass_tokens/{tokenHash} {
-      allow read: if isAuthenticated();
+      allow read: if false;
 
       allow create: if isAuthenticated() 
         && request.resource.data.issuerUserId == request.auth.uid
@@ -119,18 +117,9 @@ service cloud.firestore {
         && request.resource.data.isClaimed == false;
 
       allow update: if isAuthenticated() && (
-        (resource.data.issuerUserId == request.auth.uid 
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRevoked']))
-        || (
-          resource.data.isRevoked == false
-          && request.time.toMillis() < resource.data.expiresAt
-          && (!resource.data.isSingleUse || resource.data.isClaimed == false)
-          && (!resource.data.isClaimed || resource.data.claimantUserId == request.auth.uid)
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isClaimed', 'claimantUserId'])
-          && request.resource.data.isClaimed == true
-          && request.resource.data.claimantUserId == request.auth.uid
-          && !exists(/databases/$(database)/documents/users/$(resource.data.issuerUserId)/blocklist/$(request.auth.uid))
-        )
+        resource.data.issuerUserId == request.auth.uid 
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRevoked']) 
+        && request.resource.data.isRevoked == true
       );
 
       allow delete: if isAuthenticated() && resource.data.issuerUserId == request.auth.uid;

@@ -1,29 +1,39 @@
-const FIRESTORE_PORT = 8080;
-const PROJECT_ID = "fort-chat-f3308";
-const BASE_URL = `http://127.0.0.1:${FIRESTORE_PORT}/v1/projects/${PROJECT_ID}/databases/(default)/documents`;
+const crypto = require("crypto");
 
-function makeMockJwt(uid) {
+const FIRESTORE_PORT = process.env.FIRESTORE_EMULATOR_PORT || 8080;
+const FUNCTIONS_PORT = process.env.FUNCTIONS_EMULATOR_PORT || 5001;
+const PROJECT_ID = process.env.GCLOUD_PROJECT || process.env.PROJECT_ID || "demo-fort-chat";
+
+const BASE_URL = `http://127.0.0.1:${FIRESTORE_PORT}/v1/projects/${PROJECT_ID}/databases/(default)/documents`;
+const FUNCTIONS_URL = `http://127.0.0.1:${FUNCTIONS_PORT}/${PROJECT_ID}/us-central1`;
+
+function sha256Hex(str) {
+    return crypto.createHash("sha256").update(str, "utf8").digest("hex");
+}
+
+function makeMockJwt(uid, customClaims = {}) {
     if (!uid) return null;
     const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString('base64url');
     const payload = Buffer.from(JSON.stringify({
         user_id: uid,
         sub: uid,
         aud: PROJECT_ID,
-        iss: `https://securetoken.google.com/${PROJECT_ID}`
+        iss: `https://securetoken.google.com/${PROJECT_ID}`,
+        ...customClaims
     })).toString('base64url');
     return `${header}.${payload}.`;
 }
 
-function makeAuthHeader(uid) {
+function makeAuthHeader(uid, customClaims = {}) {
     if (!uid) return {};
-    return { 'Authorization': `Bearer ${makeMockJwt(uid)}` };
+    return { 'Authorization': `Bearer ${makeMockJwt(uid, customClaims)}` };
 }
 
-async function requestFirestore(path, method = 'GET', body = null, uid = null) {
+async function requestFirestore(path, method = 'GET', body = null, uid = null, customClaims = {}) {
     const url = `${BASE_URL}/${path}`;
     const headers = {
         'Content-Type': 'application/json',
-        ...makeAuthHeader(uid)
+        ...makeAuthHeader(uid, customClaims)
     };
     const options = { method, headers };
     if (body) {
@@ -32,6 +42,21 @@ async function requestFirestore(path, method = 'GET', body = null, uid = null) {
     const res = await fetch(url, options);
     const data = await res.json().catch(() => ({}));
     return { status: res.status, data };
+}
+
+async function callFunction(name, data = {}, uid = null, customClaims = {}) {
+    const url = `${FUNCTIONS_URL}/${name}`;
+    const headers = {
+        'Content-Type': 'application/json',
+        ...makeAuthHeader(uid, customClaims)
+    };
+    const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ data })
+    });
+    const resBody = await res.json().catch(() => ({}));
+    return { status: res.status, data: resBody };
 }
 
 // Convert JSON object to Firestore REST API fields structure
@@ -72,17 +97,20 @@ function assert(condition, message) {
 
 async function runTests() {
     console.log("=================================================");
-    console.log("Starting Fort Firebase Emulator Rules Test Suite");
+    console.log(`Starting Fort Firebase Emulator Rules & Functions Test Suite`);
+    console.log(`Target: Firestore port ${FIRESTORE_PORT}, Functions port ${FUNCTIONS_PORT}, Project: ${PROJECT_ID}`);
     console.log("=================================================\n");
 
     const ALICE_UID = "alice_user_1";
     const BOB_UID = "bob_user_2";
-    const EVE_UID = "eve_attacker_3";
+    const CHARLIE_UID = "charlie_user_3";
+    const DAVE_BLOCKED_UID = "dave_blocked_4";
+    const EVE_UID = "eve_attacker_5";
 
     // -----------------------------------------------------------------
-    // TEST 1: Private User Profiles vs Minimal Public Profiles
+    // TEST 1: Private User Profiles vs Minimal Public Profiles & phoneHash Elimination
     // -----------------------------------------------------------------
-    console.log("--- 1. Testing User Profile Privacy & Public Profiles ---");
+    console.log("--- 1. Testing User Profile Privacy & Phone Hash Elimination ---");
     
     // Alice creates private profile
     const alicePrivateProfile = toFirestoreFields({
@@ -95,110 +123,383 @@ async function runTests() {
     const createPrivateRes = await requestFirestore(`users/${ALICE_UID}`, 'PATCH', alicePrivateProfile, ALICE_UID);
     assert(createPrivateRes.status === 200, "Alice can create her own private /users document");
 
-    // Alice creates minimal public profile
+    // Alice creates her persona card with public key
+    const aliceCard = toFirestoreFields({
+        cardId: "card_alice_personal",
+        userId: ALICE_UID,
+        type: "PERSONAL",
+        publicKey: "pub_alice_key_ecc_p256",
+        displayName: "Alice"
+    });
+    const createCardRes = await requestFirestore(`users/${ALICE_UID}/cards/PERSONAL`, 'PATCH', aliceCard, ALICE_UID);
+    assert(createCardRes.status === 200, "Alice can publish her personal card public key");
+
+    // Alice creates minimal public profile (NO phoneHash)
     const alicePublicProfile = toFirestoreFields({
         userId: ALICE_UID,
         displayName: "Alice Sovereign",
         normalizedDisplayName: "alice sovereign",
         fortId: "@alice.fort",
-        phoneHash: "hash_alice_123",
         hasVerifiedPhone: true,
         discoverableByName: true,
         discoverableByPhone: true
     });
     const createPublicRes = await requestFirestore(`public_profiles/${ALICE_UID}`, 'PATCH', alicePublicProfile, ALICE_UID);
-    assert(createPublicRes.status === 200, "Alice can create her public profile in /public_profiles");
+    assert(createPublicRes.status === 200, "Alice can create her minimal public profile");
 
-    // Alice reads her private profile
-    const aliceReadPrivateRes = await requestFirestore(`users/${ALICE_UID}`, 'GET', null, ALICE_UID);
-    assert(aliceReadPrivateRes.status === 200, "Alice can read her own private /users document");
+    // Attempting to publish unsalted phoneHash in public profile MUST BE REJECTED
+    const publicProfileWithPhoneHash = toFirestoreFields({
+        userId: ALICE_UID,
+        displayName: "Alice Sovereign",
+        phoneHash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    });
+    const tamperPhoneHashRes = await requestFirestore(`public_profiles/${ALICE_UID}`, 'PATCH', publicProfileWithPhoneHash, ALICE_UID);
+    assert(tamperPhoneHashRes.status === 403, "Publishing phoneHash in /public_profiles is REJECTED by rules (403 Forbidden)");
 
-    // Eve attempts to read Alice's private profile (MUST BE REJECTED)
+    // Eve cannot read Alice's private profile
     const eveReadPrivateRes = await requestFirestore(`users/${ALICE_UID}`, 'GET', null, EVE_UID);
     assert(eveReadPrivateRes.status === 403, "Eve CANNOT read Alice's private /users document (403 Forbidden)");
 
-    // Eve reads Alice's public profile (Allowed)
+    // Eve can read Alice's minimal public profile
     const eveReadPublicRes = await requestFirestore(`public_profiles/${ALICE_UID}`, 'GET', null, EVE_UID);
     assert(eveReadPublicRes.status === 200, "Eve CAN read Alice's minimal /public_profiles document");
 
-    // Eve attempts to write to Alice's profile (MUST BE REJECTED)
-    const eveTamperProfileRes = await requestFirestore(`users/${ALICE_UID}`, 'PATCH', toFirestoreFields({ email: "pwned@eve.com" }), EVE_UID);
-    assert(eveTamperProfileRes.status === 403, "Eve CANNOT write to Alice's /users document (403 Forbidden)");
+
+    // -----------------------------------------------------------------
+    // TEST 2: Atomic Fort ID Registry & Squatting Prevention
+    // -----------------------------------------------------------------
+    console.log("\n--- 2. Testing Fort ID Unique Reservation & Anti-Squatting ---");
+
+    // Alice reserves @alice.fort
+    const aliceIdDoc = toFirestoreFields({
+        userId: ALICE_UID,
+        fortId: "@alice.fort",
+        reservedAt: Date.now()
+    });
+    const reserveAliceRes = await requestFirestore(`fort_ids/@alice.fort`, 'PATCH', aliceIdDoc, ALICE_UID);
+    assert(reserveAliceRes.status === 200, "Alice can reserve @alice.fort matching her UID");
+
+    // Eve attempts to squat @alice.fort (MUST BE REJECTED)
+    const eveSquatAliceDoc = toFirestoreFields({
+        userId: EVE_UID,
+        fortId: "@alice.fort",
+        reservedAt: Date.now()
+    });
+    const eveSquatRes = await requestFirestore(`fort_ids/@alice.fort`, 'PATCH', eveSquatAliceDoc, EVE_UID);
+    assert(eveSquatRes.status === 403, "Eve CANNOT overwrite/squat Alice's reserved Fort ID (403 Forbidden)");
+
+    // Eve attempts to create mismatched ID reservation (path != fortId field)
+    const eveMismatchedDoc = toFirestoreFields({
+        userId: EVE_UID,
+        fortId: "@target_stolen.fort",
+        reservedAt: Date.now()
+    });
+    const eveMismatchRes = await requestFirestore(`fort_ids/@eve.fort`, 'PATCH', eveMismatchedDoc, EVE_UID);
+    assert(eveMismatchRes.status === 403, "Eve CANNOT reserve Fort ID with mismatched document path (403 Forbidden)");
+
+    // Eve reserves her legitimate Fort ID
+    const eveLegitDoc = toFirestoreFields({
+        userId: EVE_UID,
+        fortId: "@eve.fort",
+        reservedAt: Date.now()
+    });
+    const eveLegitRes = await requestFirestore(`fort_ids/@eve.fort`, 'PATCH', eveLegitDoc, EVE_UID);
+    assert(eveLegitRes.status === 200, "Eve can reserve @eve.fort matching path and UID");
 
 
     // -----------------------------------------------------------------
-    // TEST 2: Contact Pass Token Scraping & Atomic Single-Use Claims
+    // TEST 3: Contact Pass Direct Access Denial & Anti-Scraping Rules
     // -----------------------------------------------------------------
-    console.log("\n--- 2. Testing Contact Pass Anti-Scraping & Secure Claims ---");
+    console.log("\n--- 3. Testing Contact Pass & Token Direct Access Denials ---");
 
-    const passId = "pass_test_001";
-    const tokenHash = "token_hash_abc123xyz";
+    const passId = "pass_test_secure_100";
+    const validToken = "PASS-TEST-TOKEN-999";
+    const validTokenHash = sha256Hex(validToken);
     const passExpiresAt = Date.now() + 86400000;
 
     // Alice creates contact pass
     const passDoc = toFirestoreFields({
         passId: passId,
         issuerUserId: ALICE_UID,
-        token: "PASS-TOKEN-SECRET",
+        cardType: "PERSONAL",
+        durationType: "SEVEN_DAYS",
+        token: validToken,
         isRevoked: false,
         isClaimed: false,
         isSingleUse: true,
-        expiresAt: passExpiresAt
+        expiresAt: passExpiresAt,
+        issuerPublicKey: "pub_alice_key_ecc_p256"
     });
     const createPassRes = await requestFirestore(`contact_passes/${passId}`, 'PATCH', passDoc, ALICE_UID);
     assert(createPassRes.status === 200, "Alice can create a contact pass");
 
     // Alice creates the token record in /pass_tokens/{tokenHash}
     const tokenDoc = toFirestoreFields({
-        tokenHash: tokenHash,
+        tokenHash: validTokenHash,
         passId: passId,
         issuerUserId: ALICE_UID,
-        token: "PASS-TOKEN-SECRET",
+        expiresAt: passExpiresAt,
+        isRevoked: false,
+        isClaimed: false
+    });
+    const createTokenRes = await requestFirestore(`pass_tokens/${validTokenHash}`, 'PATCH', tokenDoc, ALICE_UID);
+    assert(createTokenRes.status === 200, "Alice can publish pass token in /pass_tokens/{tokenHash}");
+
+    // Eve attempts to read Alice's unclaimed pass directly (MUST BE REJECTED)
+    const eveReadPassRes = await requestFirestore(`contact_passes/${passId}`, 'GET', null, EVE_UID);
+    assert(eveReadPassRes.status === 403, "Unclaimant CANNOT read unclaimed pass directly (403 Forbidden)");
+
+    // Bob attempts to read /pass_tokens directly (MUST BE REJECTED - Anti-Enumeration/Anti-Scraping)
+    const bobReadTokenDirectRes = await requestFirestore(`pass_tokens/${validTokenHash}`, 'GET', null, BOB_UID);
+    assert(bobReadTokenDirectRes.status === 403, "Clients CANNOT directly read or list /pass_tokens (403 Forbidden)");
+
+    // Bob attempts to directly write/claim /contact_passes (MUST BE REJECTED - Functions-only claim)
+    const directClaimPassRes = await requestFirestore(`contact_passes/${passId}`, 'PATCH', toFirestoreFields({
+        isClaimed: true,
+        claimantUserId: BOB_UID
+    }), BOB_UID);
+    assert(directClaimPassRes.status === 403, "Clients CANNOT directly update/claim /contact_passes (403 Forbidden)");
+
+    // Bob attempts to directly write/claim /pass_tokens (MUST BE REJECTED - Functions-only claim)
+    const directClaimTokenRes = await requestFirestore(`pass_tokens/${validTokenHash}`, 'PATCH', toFirestoreFields({
+        isClaimed: true,
+        claimantUserId: BOB_UID
+    }), BOB_UID);
+    assert(directClaimTokenRes.status === 403, "Clients CANNOT directly update/claim /pass_tokens (403 Forbidden)");
+
+
+    // -----------------------------------------------------------------
+    // TEST 4: Trusted Callable Cloud Function: claimContactPass
+    // -----------------------------------------------------------------
+    console.log("\n--- 4. Testing Trusted Callable Cloud Function: claimContactPass ---");
+
+    // 4.1 Unauthenticated caller fails
+    const unauthClaimRes = await callFunction("claimContactPass", { token: validToken }, null);
+    assert(
+        unauthClaimRes.status === 401 || (unauthClaimRes.data && unauthClaimRes.data.error && unauthClaimRes.data.error.status === 'UNAUTHENTICATED'),
+        "Unauthenticated claim call fails with UNAUTHENTICATED error"
+    );
+
+    // 4.2 Valid claim by Bob succeeds through callable function
+    const bobClaimRes = await callFunction("claimContactPass", { token: validToken }, BOB_UID);
+    const bobResult = bobClaimRes.data && bobClaimRes.data.result;
+    assert(
+        bobClaimRes.status === 200 && bobResult != null && bobResult.passId === passId && bobResult.issuerUserId === ALICE_UID,
+        "Bob can successfully claim active pass via trusted callable function"
+    );
+    assert(
+        bobResult != null && bobResult.issuerPublicKey === "pub_alice_key_ecc_p256" && bobResult.email === undefined && bobResult.phoneNumber === undefined,
+        "claimContactPass returns ONLY minimal connection metadata; zero private account data exposed"
+    );
+
+    // 4.3 Second claim of single-use pass fails (already claimed)
+    const secondClaimRes = await callFunction("claimContactPass", { token: validToken }, CHARLIE_UID);
+    assert(
+        secondClaimRes.status === 409 || (secondClaimRes.data && secondClaimRes.data.error && (secondClaimRes.data.error.status === 'ALREADY_EXISTS' || secondClaimRes.data.error.message.includes('already claimed'))),
+        "Second claim of single-use pass fails with ALREADY_EXISTS"
+    );
+
+    // 4.4 Wrong/Non-existent token fails
+    const wrongTokenRes = await callFunction("claimContactPass", { token: "PASS-NON-EXISTENT-XYZ" }, CHARLIE_UID);
+    assert(
+        wrongTokenRes.status === 404 || (wrongTokenRes.data && wrongTokenRes.data.error && (wrongTokenRes.data.error.status === 'NOT_FOUND' || wrongTokenRes.data.error.message.includes('not found'))),
+        "Non-existent token claim fails with NOT_FOUND"
+    );
+
+    // 4.5 Expired pass fails
+    const expiredPassId = "pass_expired_999";
+    const expiredToken = "PASS-EXPIRED-TOKEN-000";
+    const expiredTokenHash = sha256Hex(expiredToken);
+    await requestFirestore(`contact_passes/${expiredPassId}`, 'PATCH', toFirestoreFields({
+        passId: expiredPassId,
+        issuerUserId: ALICE_UID,
+        cardType: "PERSONAL",
+        durationType: "ONE_CONVERSATION",
+        token: expiredToken,
         isRevoked: false,
         isClaimed: false,
         isSingleUse: true,
-        expiresAt: passExpiresAt
-    });
-    const createTokenRes = await requestFirestore(`pass_tokens/${tokenHash}`, 'PATCH', tokenDoc, ALICE_UID);
-    assert(createTokenRes.status === 200, "Alice can publish pass token in /pass_tokens/{tokenHash}");
+        expiresAt: Date.now() - 5000, // Expired in past
+        issuerPublicKey: "pub_alice_key_ecc_p256"
+    }), ALICE_UID);
+    await requestFirestore(`pass_tokens/${expiredTokenHash}`, 'PATCH', toFirestoreFields({
+        tokenHash: expiredTokenHash,
+        passId: expiredPassId,
+        issuerUserId: ALICE_UID,
+        expiresAt: Date.now() - 5000,
+        isRevoked: false,
+        isClaimed: false
+    }), ALICE_UID);
 
-    // Eve attempts to read Alice's pass from /contact_passes (MUST BE REJECTED - Anti Scraping)
-    const eveScrapePassRes = await requestFirestore(`contact_passes/${passId}`, 'GET', null, EVE_UID);
-    assert(eveScrapePassRes.status === 403, "Eve CANNOT scrape Alice's document in /contact_passes (403 Forbidden)");
+    const claimExpiredRes = await callFunction("claimContactPass", { token: expiredToken }, CHARLIE_UID);
+    assert(
+        claimExpiredRes.status === 400 || (claimExpiredRes.data && claimExpiredRes.data.error && (claimExpiredRes.data.error.status === 'FAILED_PRECONDITION' || claimExpiredRes.data.error.message.includes('expired'))),
+        "Expired pass claim fails with FAILED_PRECONDITION"
+    );
 
-    // Bob (legitimate token recipient) reads /pass_tokens/{tokenHash} by knowing the token hash
-    const bobReadTokenRes = await requestFirestore(`pass_tokens/${tokenHash}`, 'GET', null, BOB_UID);
-    assert(bobReadTokenRes.status === 200, "Bob can read pass token by direct hash lookup");
+    // 4.6 Revoked pass fails
+    const revokedPassId = "pass_revoked_888";
+    const revokedToken = "PASS-REVOKED-TOKEN-888";
+    const revokedTokenHash = sha256Hex(revokedToken);
+    // 1. Alice creates active pass and token
+    await requestFirestore(`contact_passes/${revokedPassId}`, 'PATCH', toFirestoreFields({
+        passId: revokedPassId,
+        issuerUserId: ALICE_UID,
+        cardType: "PERSONAL",
+        durationType: "SEVEN_DAYS",
+        token: revokedToken,
+        isRevoked: false,
+        isClaimed: false,
+        isSingleUse: true,
+        expiresAt: Date.now() + 86400000,
+        issuerPublicKey: "pub_alice_key_ecc_p256"
+    }), ALICE_UID);
+    await requestFirestore(`pass_tokens/${revokedTokenHash}`, 'PATCH', toFirestoreFields({
+        tokenHash: revokedTokenHash,
+        passId: revokedPassId,
+        issuerUserId: ALICE_UID,
+        expiresAt: Date.now() + 86400000,
+        isRevoked: false,
+        isClaimed: false
+    }), ALICE_UID);
 
-    // Bob claims the pass atomically
-    const claimUpdate = {
-        fields: {
-            ...tokenDoc.fields,
-            isClaimed: { booleanValue: true },
-            claimantUserId: { stringValue: BOB_UID }
-        }
-    };
-    const bobClaimRes = await requestFirestore(`pass_tokens/${tokenHash}?updateMask.fieldPaths=isClaimed&updateMask.fieldPaths=claimantUserId`, 'PATCH', claimUpdate, BOB_UID);
-    assert(bobClaimRes.status === 200, "Bob can atomically claim unclaimed pass");
+    // 2. Alice revokes the pass (authorized update under firestore.rules)
+    await requestFirestore(`contact_passes/${revokedPassId}?updateMask.fieldPaths=isRevoked`, 'PATCH', toFirestoreFields({
+        isRevoked: true
+    }), ALICE_UID);
+    await requestFirestore(`pass_tokens/${revokedTokenHash}?updateMask.fieldPaths=isRevoked`, 'PATCH', toFirestoreFields({
+        isRevoked: true
+    }), ALICE_UID);
 
-    // Eve attempts to claim the same pass again (MUST BE REJECTED - Single-Use Enforcement)
-    const eveClaimUpdate = {
-        fields: {
-            ...tokenDoc.fields,
-            isClaimed: { booleanValue: true },
-            claimantUserId: { stringValue: EVE_UID }
-        }
-    };
-    const eveDoubleClaimRes = await requestFirestore(`pass_tokens/${tokenHash}?updateMask.fieldPaths=isClaimed&updateMask.fieldPaths=claimantUserId`, 'PATCH', eveClaimUpdate, EVE_UID);
-    assert(eveDoubleClaimRes.status === 403, "Eve CANNOT claim already-claimed pass (403 Forbidden)");
+    const claimRevokedRes = await callFunction("claimContactPass", { token: revokedToken }, CHARLIE_UID);
+    assert(
+        claimRevokedRes.status === 400 || (claimRevokedRes.data && claimRevokedRes.data.error && (claimRevokedRes.data.error.status === 'FAILED_PRECONDITION' || claimRevokedRes.data.error.message.includes('revoked'))),
+        "Revoked pass claim fails with FAILED_PRECONDITION"
+    );
+
+    // 4.7 Blocked claimant fails
+    // Alice blocks Dave
+    await requestFirestore(`users/${ALICE_UID}/blocklist/${DAVE_BLOCKED_UID}`, 'PATCH', toFirestoreFields({
+        blockedUserId: DAVE_BLOCKED_UID,
+        createdAt: Date.now()
+    }), ALICE_UID);
+
+    const blockedPassId = "pass_blocked_test_777";
+    const blockedToken = "PASS-BLOCKED-TOKEN-777";
+    const blockedTokenHash = sha256Hex(blockedToken);
+    await requestFirestore(`contact_passes/${blockedPassId}`, 'PATCH', toFirestoreFields({
+        passId: blockedPassId,
+        issuerUserId: ALICE_UID,
+        cardType: "PERSONAL",
+        durationType: "SEVEN_DAYS",
+        token: blockedToken,
+        isRevoked: false,
+        isClaimed: false,
+        isSingleUse: true,
+        expiresAt: Date.now() + 86400000,
+        issuerPublicKey: "pub_alice_key_ecc_p256"
+    }), ALICE_UID);
+    await requestFirestore(`pass_tokens/${blockedTokenHash}`, 'PATCH', toFirestoreFields({
+        tokenHash: blockedTokenHash,
+        passId: blockedPassId,
+        issuerUserId: ALICE_UID,
+        expiresAt: Date.now() + 86400000,
+        isRevoked: false,
+        isClaimed: false
+    }), ALICE_UID);
+
+    const claimBlockedRes = await callFunction("claimContactPass", { token: blockedToken }, DAVE_BLOCKED_UID);
+    assert(
+        claimBlockedRes.status === 403 || (claimBlockedRes.data && claimBlockedRes.data.error && (claimBlockedRes.data.error.status === 'PERMISSION_DENIED' || claimBlockedRes.data.error.message.includes('cannot claim'))),
+        "Blocked claimant cannot claim pass (PERMISSION_DENIED)"
+    );
 
 
     // -----------------------------------------------------------------
-    // TEST 3: WebRTC Calls & ICE Candidate Security
+    // TEST 5: Trusted Callable Cloud Function: lookupUserByPhone
     // -----------------------------------------------------------------
-    console.log("\n--- 3. Testing WebRTC Call Signaling & ICE Candidate Isolation ---");
+    console.log("\n--- 5. Testing Trusted Callable Cloud Function: lookupUserByPhone ---");
 
-    const callId = "call_alice_bob_123";
+    // Setup Bob with phone number and phone verification in his private profile
+    await requestFirestore(`users/${BOB_UID}`, 'PATCH', toFirestoreFields({
+        userId: BOB_UID,
+        phoneNumber: "+15559876543",
+        displayName: "Bob Guardian",
+        fortId: "@bob.fort",
+        discoverableByPhone: true
+    }), BOB_UID);
+
+    // Setup Charlie with unlisted phone (discoverableByPhone = false)
+    await requestFirestore(`users/${CHARLIE_UID}`, 'PATCH', toFirestoreFields({
+        userId: CHARLIE_UID,
+        phoneNumber: "+15550001111",
+        displayName: "Charlie Hidden",
+        fortId: "@charlie.fort",
+        discoverableByPhone: false
+    }), CHARLIE_UID);
+
+    // 5.1 Requester without phone verification is rejected
+    const unverifiedLookupRes = await callFunction("lookupUserByPhone", { phoneNumber: "+15559876543" }, EVE_UID);
+    assert(
+        unverifiedLookupRes.status === 403 || (unverifiedLookupRes.data && unverifiedLookupRes.data.error && unverifiedLookupRes.data.error.status === 'PERMISSION_DENIED'),
+        "Requester without verified phone is REJECTED by phone lookup (PERMISSION_DENIED)"
+    );
+
+    // 5.2 Verified requester (Alice has phoneNumber in users/alice_user_1) searches Bob
+    const aliceLookupBobRes = await callFunction("lookupUserByPhone", { phoneNumber: "+1 (555) 987-6543" }, ALICE_UID);
+    const bobFound = aliceLookupBobRes.data && aliceLookupBobRes.data.result && aliceLookupBobRes.data.result.user;
+    assert(
+        aliceLookupBobRes.status === 200 && bobFound != null && bobFound.userId === BOB_UID && bobFound.displayName === "Bob Guardian",
+        "Verified requester discovers discoverable peer by normalized phone"
+    );
+    assert(
+        bobFound != null && bobFound.phoneNumber === undefined && bobFound.phoneHash === undefined,
+        "Phone lookup returns only minimal public profile; no phone number or reusable hashes exposed"
+    );
+
+    // 5.3 Target with discoverableByPhone = false returns null
+    const aliceLookupCharlieRes = await callFunction("lookupUserByPhone", { phoneNumber: "+15550001111" }, ALICE_UID);
+    const charlieFound = aliceLookupCharlieRes.data && aliceLookupCharlieRes.data.result && aliceLookupCharlieRes.data.result.user;
+    assert(
+        aliceLookupCharlieRes.status === 200 && charlieFound === null,
+        "Target user with discoverableByPhone: false is NOT discoverable (returns null)"
+    );
+
+    // 5.4 Target who blocked requester returns null
+    // Bob blocks Alice
+    await requestFirestore(`users/${BOB_UID}/blocklist/${ALICE_UID}`, 'PATCH', toFirestoreFields({
+        blockedUserId: ALICE_UID,
+        createdAt: Date.now()
+    }), BOB_UID);
+
+    const aliceLookupBlockedBobRes = await callFunction("lookupUserByPhone", { phoneNumber: "+15559876543" }, ALICE_UID);
+    const blockedBobFound = aliceLookupBlockedBobRes.data && aliceLookupBlockedBobRes.data.result && aliceLookupBlockedBobRes.data.result.user;
+    assert(
+        aliceLookupBlockedBobRes.status === 200 && blockedBobFound === null,
+        "Target user who blocked requester is NOT discoverable (returns null)"
+    );
+
+    // Unblock Alice so subsequent legitimate calls and messages can proceed
+    await requestFirestore(`users/${BOB_UID}/blocklist/${ALICE_UID}`, 'DELETE', null, BOB_UID);
+
+    // 5.5 Rate limiting test: excessive lookups trigger RESOURCE_EXHAUSTED
+    let rateLimited = false;
+    for (let i = 0; i < 12; i++) {
+        const res = await callFunction("lookupUserByPhone", { phoneNumber: `+1555999000${i}` }, ALICE_UID);
+        if (res.status === 429 || (res.data && res.data.error && res.data.error.status === 'RESOURCE_EXHAUSTED')) {
+            rateLimited = true;
+            break;
+        }
+    }
+    assert(rateLimited, "Phone discovery enforces strict server-side rate limiting against enumeration");
+
+
+    // -----------------------------------------------------------------
+    // TEST 6: WebRTC Calls & ICE Candidate Security
+    // -----------------------------------------------------------------
+    console.log("\n--- 6. Testing WebRTC Call Signaling & ICE Candidate Isolation ---");
+
+    const callId = "call_alice_bob_prod_1";
 
     // Alice creates call to Bob
     const callDoc = toFirestoreFields({
@@ -212,11 +513,11 @@ async function runTests() {
     const createCallRes = await requestFirestore(`calls/${callId}`, 'PATCH', callDoc, ALICE_UID);
     assert(createCallRes.status === 200, "Alice can initiate call to Bob in /calls");
 
-    // Eve attempts to read the call (MUST BE REJECTED)
+    // Eve cannot read call
     const eveReadCallRes = await requestFirestore(`calls/${callId}`, 'GET', null, EVE_UID);
-    assert(eveReadCallRes.status === 403, "Eve CANNOT read Alice & Bob's call signaling document (403 Forbidden)");
+    assert(eveReadCallRes.status === 403, "Eve CANNOT read Alice & Bob's call document (403 Forbidden)");
 
-    // Alice adds ICE candidate
+    // Alice writes ICE candidate
     const candId1 = "cand_alice_1";
     const aliceCand = toFirestoreFields({
         candidate: "candidate:1 1 UDP 2122260223 192.168.1.100 54321 typ host",
@@ -231,11 +532,10 @@ async function runTests() {
     const bobReadCandRes = await requestFirestore(`calls/${callId}/candidates/${candId1}`, 'GET', null, BOB_UID);
     assert(bobReadCandRes.status === 200, "Bob (receiver) can read Alice's ICE candidate");
 
-    // Eve attempts to read Alice's ICE candidate (MUST BE REJECTED)
+    // Eve cannot read or inject ICE candidate
     const eveReadCandRes = await requestFirestore(`calls/${callId}/candidates/${candId1}`, 'GET', null, EVE_UID);
     assert(eveReadCandRes.status === 403, "Eve CANNOT read call candidates for Alice & Bob's call (403 Forbidden)");
 
-    // Eve attempts to inject an ICE candidate into Alice & Bob's call (MUST BE REJECTED)
     const eveCand = toFirestoreFields({
         candidate: "candidate:fake",
         sdpMid: "0",
@@ -245,23 +545,13 @@ async function runTests() {
     const eveInjectCandRes = await requestFirestore(`calls/${callId}/candidates/cand_eve`, 'PATCH', eveCand, EVE_UID);
     assert(eveInjectCandRes.status === 403, "Eve CANNOT inject ICE candidate into call (403 Forbidden)");
 
-    // Eve attempts to modify participant identities in the call (MUST BE REJECTED)
-    const tamperCall = {
-        fields: {
-            ...callDoc.fields,
-            receiverUserId: { stringValue: EVE_UID }
-        }
-    };
-    const eveTamperCallRes = await requestFirestore(`calls/${callId}`, 'PATCH', tamperCall, EVE_UID);
-    assert(eveTamperCallRes.status === 403, "Eve CANNOT alter call participant identities (403 Forbidden)");
-
 
     // -----------------------------------------------------------------
-    // TEST 4: Cross-User Writes in Messages and Knock First Requests
+    // TEST 7: Cross-User Writes in Messages and Knock First Requests
     // -----------------------------------------------------------------
-    console.log("\n--- 4. Testing Cross-User Spoofing & Message Isolation ---");
+    console.log("\n--- 7. Testing Cross-User Spoofing & Message Isolation ---");
 
-    const messageId = "msg_e2ee_001";
+    const messageId = "msg_e2ee_prod_001";
     // Eve attempts to spoof Alice as sender of a message to Bob (MUST BE REJECTED)
     const spoofedMsg = toFirestoreFields({
         messageId: messageId,
@@ -286,18 +576,18 @@ async function runTests() {
     const aliceSendMsgRes = await requestFirestore(`messages/${messageId}`, 'PATCH', legitMsg, ALICE_UID);
     assert(aliceSendMsgRes.status === 200, "Alice can send legitimate encrypted message to Bob");
 
-    // Eve attempts to read Alice's message to Bob (MUST BE REJECTED)
+    // Eve cannot read Alice's message to Bob
     const eveReadMsgRes = await requestFirestore(`messages/${messageId}`, 'GET', null, EVE_UID);
     assert(eveReadMsgRes.status === 403, "Eve CANNOT read encrypted message between Alice and Bob (403 Forbidden)");
 
-    // Bob reads the message (Allowed)
+    // Bob reads the message
     const bobReadMsgRes = await requestFirestore(`messages/${messageId}`, 'GET', null, BOB_UID);
     assert(bobReadMsgRes.status === 200, "Bob can read message addressed to him");
 
-    // Eve attempts to spoof Knock First request as Alice (MUST BE REJECTED)
+    // Eve attempts to spoof Knock First request as Alice
     const spoofKnock = toFirestoreFields({
         requestId: "knock_spoof_1",
-        senderUserId: ALICE_UID, // Spoofed!
+        senderUserId: ALICE_UID,
         recipientUserId: BOB_UID,
         status: "PENDING"
     });

@@ -6,7 +6,9 @@ import androidx.test.core.app.ApplicationProvider
 import com.fort.messenger.data.local.FortDatabase
 import com.fort.messenger.data.remote.FirebaseRemoteBackend
 import com.fort.messenger.data.remote.InMemoryRemoteRelay
+import com.fort.messenger.data.remote.RemoteUserAccount
 import com.fort.messenger.data.repository.FortRepository
+import com.fort.messenger.data.repository.ExistingRemoteKeysException
 import com.fort.messenger.model.*
 import com.fort.messenger.data.local.KnockFirstRequestEntity
 import com.fort.messenger.security.ContactPassPayload
@@ -1495,5 +1497,110 @@ class FortRealProductionTest {
         assertFalse("Duplicate candidate must be filtered out", seen.add(key2))
         assertTrue(seen.add(key3))
         assertEquals(2, seen.size)
+    }
+
+    @Test
+    fun testSameDeviceLogoutLoginPreservesLocalKeys() = runBlocking {
+        val alice = repositoryAlice.register("alice_same@fort.net", "Pass123!", "Alice Same").getOrThrow()
+        val originalCards = repositoryAlice.getPersonaCards(alice.userId).first()
+        assertEquals(4, originalCards.size)
+        val origPersonal = originalCards.find { it.type == CardType.PERSONAL }!!
+
+        // Logout on same device
+        repositoryAlice.logout()
+        assertNull(databaseAlice.userAccountDao().getActiveAccountOnce())
+
+        // Login on same device
+        val loginResult = repositoryAlice.login("alice_same@fort.net", "Pass123!")
+        assertTrue(loginResult.isSuccess)
+        val restored = loginResult.getOrThrow()
+        assertEquals(alice.userId, restored.userId)
+
+        // Local keys must be preserved exactly, not regenerated
+        val restoredCards = repositoryAlice.getPersonaCards(alice.userId).first()
+        assertEquals(4, restoredCards.size)
+        val restoredPersonal = restoredCards.find { it.type == CardType.PERSONAL }!!
+        assertEquals("Public key must be preserved across logout/login", origPersonal.publicKey, restoredPersonal.publicKey)
+        assertEquals("Private key must be preserved across logout/login", origPersonal.privateKeyEncrypted, restoredPersonal.privateKeyEncrypted)
+    }
+
+    @Test
+    fun testFreshDatabaseLoginWithExistingRemoteKeysFailsWithoutConfirmation() = runBlocking {
+        // Device 1 registers Alice
+        val alice = repositoryAlice.register("alice_fresh@fort.net", "Pass123!", "Alice Sovereign").getOrThrow()
+
+        // Device 2 with fresh empty database connects to same remote server
+        val databaseDevice2 = FortDatabase.createInMemory(context)
+        val repositoryDevice2 = FortRepository(databaseDevice2, serverRelay)
+
+        // Attempting to sign in on fresh device without key reset or backup MUST FAIL
+        val loginResult = repositoryDevice2.login("alice_fresh@fort.net", "Pass123!", forceKeyReset = false)
+        assertTrue("Signing into existing account from fresh install must fail without confirmation", loginResult.isFailure)
+        assertTrue(loginResult.exceptionOrNull() is ExistingRemoteKeysException)
+        val ex = loginResult.exceptionOrNull() as ExistingRemoteKeysException
+        assertEquals(alice.userId, ex.userId)
+        assertTrue(ex.message.contains("no longer be decryptable"))
+
+        // Confirmed key reset succeeds and initializes new local identity keys
+        val resetResult = repositoryDevice2.confirmKeyReset(
+            RemoteUserAccount(userId = alice.userId, email = alice.email, passwordHash = "hash123", displayName = alice.displayName, fortId = "@alicesovereign.fort"),
+            "Alice Sovereign"
+        )
+        assertTrue("Confirmed key reset succeeds", resetResult.isSuccess)
+        val dev2Cards = repositoryDevice2.getPersonaCards(alice.userId).first()
+        assertEquals(4, dev2Cards.size)
+
+        databaseDevice2.close()
+    }
+
+    @Test
+    fun testEncryptedKeyBackupExportAndRestoreOnFreshDevice() = runBlocking {
+        // Device 1 registers Bob
+        val bob = repositoryBob.register("bob_backup@fort.net", "Pass123!", "Bob Vault").getOrThrow()
+        val origCards = repositoryBob.getPersonaCards(bob.userId).first()
+        val origPersonalCard = origCards.find { it.type == CardType.PERSONAL }!!
+
+        // Export encrypted key backup with passphrase
+        val backupResult = repositoryBob.exportEncryptedKeyBackup(bob.userId, "SovereignPassphrase456!")
+        assertTrue("Key backup export succeeds", backupResult.isSuccess)
+        val backupCiphertext = backupResult.getOrThrow()
+
+        // Device 2 with fresh database
+        val databaseDevice2 = FortDatabase.createInMemory(context)
+        val repositoryDevice2 = FortRepository(databaseDevice2, serverRelay)
+        val remoteBob = RemoteUserAccount(userId = bob.userId, email = bob.email, passwordHash = "hash123", displayName = bob.displayName, fortId = "@bobvault.fort")
+
+        // Restoring with wrong passphrase fails
+        val failResult = repositoryDevice2.restoreEncryptedKeyBackup(remoteBob, "WrongPassphrase!", backupCiphertext)
+        assertTrue("Restore with wrong passphrase must fail", failResult.isFailure)
+
+        // Restoring with correct passphrase succeeds
+        val restoreResult = repositoryDevice2.restoreEncryptedKeyBackup(remoteBob, "SovereignPassphrase456!", backupCiphertext)
+        assertTrue("Restore with correct passphrase succeeds", restoreResult.isSuccess)
+        val restoredAccount = restoreResult.getOrThrow()
+        assertEquals(bob.userId, restoredAccount.userId)
+
+        // Restored cards match original keys exactly
+        val restoredCards = repositoryDevice2.getPersonaCards(bob.userId).first()
+        assertEquals(4, restoredCards.size)
+        val restoredPersonal = restoredCards.find { it.type == CardType.PERSONAL }!!
+        assertEquals("Restored public key matches original", origPersonalCard.publicKey, restoredPersonal.publicKey)
+        assertEquals("Restored encrypted private key matches original", origPersonalCard.privateKeyEncrypted, restoredPersonal.privateKeyEncrypted)
+
+        databaseDevice2.close()
+    }
+
+    @Test
+    fun testFortIdCollisionHandlingWithSameDisplayName() = runBlocking {
+        // Two users register with identical display name "Sovereign Shield"
+        val user1 = repositoryAlice.register("user1@fort.net", "Pass123!", "Sovereign Shield").getOrThrow()
+        val user2 = repositoryBob.register("user2@fort.net", "Pass456!", "Sovereign Shield").getOrThrow()
+
+        val cards1 = repositoryAlice.getPersonaCards(user1.userId).first()
+        val cards2 = repositoryBob.getPersonaCards(user2.userId).first()
+
+        assertNotNull(cards1)
+        assertNotNull(cards2)
+        assertNotEquals(user1.userId, user2.userId)
     }
 }

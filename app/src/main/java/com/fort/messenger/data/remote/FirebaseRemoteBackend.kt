@@ -15,6 +15,7 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.SetOptions
+import com.google.firebase.functions.FirebaseFunctions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -48,6 +49,20 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
 
     private val firestore: FirebaseFirestore
         get() = FirebaseFirestore.getInstance(requireFirebaseApp())
+
+    private val functions: FirebaseFunctions
+        get() = FirebaseFunctions.getInstance(requireFirebaseApp())
+
+    init {
+        val emuHost = System.getProperty("FORT_EMULATOR_HOST") ?: System.getenv("FORT_EMULATOR_HOST")
+        if (!emuHost.isNullOrBlank()) {
+            try {
+                auth.useEmulator(emuHost, 9099)
+                firestore.useEmulator(emuHost, 8080)
+                functions.useEmulator(emuHost, 5001)
+            } catch (_: Exception) {}
+        }
+    }
 
     private fun requireFirebaseApp(): FirebaseApp {
         return firebaseApp ?: com.fort.messenger.FortApp.ensureFirebaseInitialized(appContext) ?: throw IllegalStateException(
@@ -87,16 +102,47 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
         val baseFortId = displayName.lowercase().replace(" ", "").replace("@", "")
         var fortId = previous.getString("fortId")
         if (fortId.isNullOrBlank()) {
-            val candidate = "@$baseFortId.fort"
-            val existingReservation = firestore.collection("fort_ids").document(candidate).get().await()
-            fortId = if (existingReservation.exists() && existingReservation.getString("userId") != user.uid) {
-                "@${baseFortId}_${user.uid.take(4).lowercase()}.fort"
-            } else {
-                candidate
+            val base = baseFortId.ifBlank { "member" }
+            var candidate = "@$base.fort"
+            var reserved = false
+            var attempt = 0
+            while (attempt < 5 && !reserved) {
+                val candidateToTry = candidate
+                val fortIdRef = firestore.collection("fort_ids").document(candidateToTry)
+                try {
+                    firestore.runTransaction { tx ->
+                        val snap = tx.get(fortIdRef)
+                        if (!snap.exists()) {
+                            tx.set(
+                                fortIdRef,
+                                mapOf(
+                                    "userId" to user.uid,
+                                    "fortId" to candidateToTry,
+                                    "reservedAt" to System.currentTimeMillis()
+                                )
+                            )
+                            fortId = candidateToTry
+                            reserved = true
+                        } else if (snap.getString("userId") == user.uid) {
+                            fortId = candidateToTry
+                            reserved = true
+                        }
+                    }.await()
+                } catch (_: Exception) {
+                    reserved = false
+                }
+                if (!reserved) {
+                    attempt++
+                    candidate = "@${base}_${user.uid.take(4).lowercase()}_$attempt.fort"
+                }
             }
-            firestore.collection("fort_ids").document(fortId).set(
-                mapOf("userId" to user.uid, "fortId" to fortId, "reservedAt" to System.currentTimeMillis())
-            ).await()
+            if (fortId.isNullOrBlank()) {
+                val fallbackId = "@${base}_${java.util.UUID.randomUUID().toString().take(6).lowercase()}.fort"
+                firestore.collection("fort_ids").document(fallbackId).set(
+                    mapOf("userId" to user.uid, "fortId" to fallbackId, "reservedAt" to System.currentTimeMillis())
+                ).await()
+                fortId = fallbackId
+            }
         }
         val discoverableByName = previous.getBoolean("discoverableByName") ?: true
         val discoverableByPhone = previous.getBoolean("discoverableByPhone") ?: true
@@ -113,8 +159,7 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
         if (!previous.exists()) profile["createdAt"] = System.currentTimeMillis()
         profileRef.set(profile, SetOptions.merge()).await()
 
-        // Also publish minimal public discovery profile (zero private email or raw phone numbers exposed)
-        val phoneHash = user.phoneNumber?.let { FortCryptoManager.sha256Hex(PhoneDiscoveryHelper.normalizeToE164(it) ?: it) } ?: ""
+        // Also publish minimal public discovery profile (zero private email, raw phone numbers, or phone hashes exposed)
         val publicProfile = mutableMapOf<String, Any?>(
             "userId" to user.uid,
             "displayName" to displayName,
@@ -122,7 +167,6 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
             "fortId" to fortId,
             "avatarEmoji" to "🛡️",
             "hasVerifiedPhone" to (user.phoneNumber != null),
-            "phoneHash" to phoneHash,
             "discoverableByName" to discoverableByName,
             "discoverableByPhone" to discoverableByPhone,
             "updatedAt" to System.currentTimeMillis()
@@ -308,50 +352,37 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
     override suspend fun claimPass(token: String, claimantUserId: String, passId: String?): Result<RemotePassRecord> = capture {
         requireCaller(claimantUserId)
         val cleanToken = token.trim().uppercase()
-        val tokenHash = FortCryptoManager.sha256Hex(cleanToken)
-
-        var effectivePassId = passId
-        if (effectivePassId.isNullOrBlank()) {
-            val tokenDoc = firestore.collection("pass_tokens").document(tokenHash).get().await()
-            effectivePassId = tokenDoc.getString("passId")
-        }
-        if (effectivePassId.isNullOrBlank()) {
-            // Also check token without prefix
-            val altHash = FortCryptoManager.sha256Hex(cleanToken.removePrefix("PASS-"))
-            val altDoc = firestore.collection("pass_tokens").document(altHash).get().await()
-            effectivePassId = altDoc.getString("passId")
-        }
-        if (effectivePassId.isNullOrBlank()) {
-            throw IllegalArgumentException("Pass not found. Check the invitation and try again.")
+        val payload = mutableMapOf<String, Any>("token" to cleanToken)
+        if (!passId.isNullOrBlank()) {
+            payload["passId"] = passId
         }
 
-        val passRef = firestore.collection("contact_passes").document(effectivePassId)
-        val tokenRef = firestore.collection("pass_tokens").document(tokenHash)
+        val result = functions.getHttpsCallable("claimContactPass").call(payload).await()
+        @Suppress("UNCHECKED_CAST")
+        val resMap = result.getData() as? Map<String, Any?>
+            ?: throw IllegalStateException("Invalid response from pass claim service.")
 
-        firestore.runTransaction { transaction ->
-            val snapshot = transaction.get(passRef)
-            if (!snapshot.exists()) throw IllegalArgumentException("Pass not found. Check the invitation and try again.")
-            val pass = snapshot.toPassRecord()
-            val now = System.currentTimeMillis()
-            if (pass.isRevoked) throw SecurityException("This pass has been revoked.")
-            if (pass.expiresAt <= now) throw SecurityException("This pass has expired.")
-            if (pass.isSingleUse && pass.isClaimed) throw SecurityException("This single-use pass was already claimed.")
-            if (pass.isClaimed && pass.claimantUserId != null && pass.claimantUserId != claimantUserId) {
-                throw SecurityException("This pass is already connected to another account.")
-            }
-            transaction.update(
-                passRef,
-                mapOf("isClaimed" to true, "claimantUserId" to claimantUserId)
-            )
-            val tokenSnap = transaction.get(tokenRef)
-            if (tokenSnap.exists()) {
-                transaction.update(
-                    tokenRef,
-                    mapOf("isClaimed" to true, "claimantUserId" to claimantUserId)
-                )
-            }
-            pass.copy(isClaimed = true, claimantUserId = claimantUserId)
-        }.await()
+        val pId = resMap["passId"] as? String ?: (passId ?: "")
+        val issuerUid = resMap["issuerUserId"] as? String
+            ?: throw IllegalStateException("Missing issuer ID in claim response.")
+        val cardType = resMap["cardType"] as? String ?: "PERSONAL"
+        val durationType = resMap["durationType"] as? String ?: "SEVEN_DAYS"
+        val expiresAt = (resMap["expiresAt"] as? Number)?.toLong() ?: 0L
+        val isSingleUse = resMap["isSingleUse"] as? Boolean ?: true
+        val issuerPublicKey = resMap["issuerPublicKey"] as? String ?: ""
+
+        RemotePassRecord(
+            passId = pId,
+            issuerUserId = issuerUid,
+            token = cleanToken,
+            cardType = cardType,
+            durationType = durationType,
+            expiresAt = expiresAt,
+            isSingleUse = isSingleUse,
+            issuerPublicKey = issuerPublicKey,
+            isClaimed = true,
+            claimantUserId = claimantUserId
+        )
     }
 
     override suspend fun revokePass(passId: String, requesterUserId: String): Result<Unit> = capture {
@@ -586,35 +617,27 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
                 }
             }
             SearchMode.PHONE -> {
-                val myProfile = firestore.collection("public_profiles").document(requesterUserId).get().await()
-                if (myProfile.getBoolean("hasVerifiedPhone") != true) {
-                    throw IllegalStateException("Phone verification is required before you can discover peers by phone.")
-                }
-                val normalized = PhoneDiscoveryHelper.normalizeToE164(trimmed)
-                    ?: throw IllegalArgumentException("Invalid phone number format. Include country code (e.g. +1234567890).")
-                val targetHash = FortCryptoManager.sha256Hex(normalized)
-
-                val snapshot = firestore.collection("public_profiles")
-                    .whereEqualTo("phoneHash", targetHash)
-                    .limit(1)
-                    .get()
+                val callResult = functions.getHttpsCallable("lookupUserByPhone")
+                    .call(mapOf("phoneNumber" to trimmed))
                     .await()
-
-                val doc = snapshot.documents.firstOrNull()
-                if (doc == null || !doc.exists()) emptyList()
-                else {
-                    val uid = doc.getString("userId") ?: doc.id
-                    val discoverable = doc.getBoolean("discoverableByPhone") ?: true
-                    val dName = doc.getString("displayName") ?: "Sovereign User"
-                    if (uid == requesterUserId || !discoverable) emptyList()
-                    else listOf(
+                @Suppress("UNCHECKED_CAST")
+                val resMap = callResult.getData() as? Map<String, Any?>
+                @Suppress("UNCHECKED_CAST")
+                val userMap = resMap?.get("user") as? Map<String, Any?>
+                if (userMap == null) {
+                    emptyList()
+                } else {
+                    val uid = userMap["userId"] as? String ?: return@capture emptyList()
+                    val dName = userMap["displayName"] as? String ?: "Sovereign User"
+                    val fortId = userMap["fortId"] as? String ?: "@$dName.fort"
+                    listOf(
                         UserSearchResult(
                             userId = uid,
                             displayName = dName,
-                            fortId = doc.getString("fortId") ?: "@${dName.lowercase().replace(" ", "")}.fort",
-                            avatarEmoji = "🛡️",
+                            fortId = fortId,
+                            avatarEmoji = userMap["avatarEmoji"] as? String ?: "🛡️",
                             isExistingConnection = false,
-                            hasVerifiedPhone = true
+                            hasVerifiedPhone = userMap["hasVerifiedPhone"] == true
                         )
                     )
                 }

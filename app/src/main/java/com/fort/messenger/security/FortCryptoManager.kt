@@ -291,4 +291,45 @@ object FortCryptoManager {
         val digest = MessageDigest.getInstance("SHA-256").digest(input.toByteArray(Charsets.UTF_8))
         return digest.joinToString("") { "%02x".format(it) }
     }
+
+    fun encryptWithPassphrase(data: ByteArray, passphrase: CharArray, salt: ByteArray = ByteArray(16).apply { secureRandom.nextBytes(this) }): String {
+        val keySpec = javax.crypto.spec.PBEKeySpec(passphrase, salt, 10000, 256)
+        val factory = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+        val derivedKey = factory.generateSecret(keySpec).encoded
+        val secretKey = SecretKeySpec(derivedKey, "AES")
+
+        val iv = ByteArray(GCM_IV_SIZE_BYTES).apply { secureRandom.nextBytes(this) }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        val gcmSpec = GCMParameterSpec(GCM_TAG_SIZE_BITS, iv)
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey, gcmSpec)
+        val ciphertext = cipher.doFinal(data)
+
+        val combined = ByteBuffer.allocate(salt.size + iv.size + ciphertext.size)
+            .put(salt)
+            .put(iv)
+            .put(ciphertext)
+            .array()
+        return Base64.encodeToString(combined, Base64.NO_WRAP)
+    }
+
+    fun decryptWithPassphrase(payloadBase64: String, passphrase: CharArray): ByteArray {
+        val combined = Base64.decode(payloadBase64, Base64.NO_WRAP)
+        if (combined.size < 16 + GCM_IV_SIZE_BYTES + 16) {
+            throw IllegalArgumentException("Corrupt backup payload.")
+        }
+        val buffer = ByteBuffer.wrap(combined)
+        val salt = ByteArray(16).also { buffer.get(it) }
+        val iv = ByteArray(GCM_IV_SIZE_BYTES).also { buffer.get(it) }
+        val ciphertext = ByteArray(buffer.remaining()).also { buffer.get(it) }
+
+        val keySpec = javax.crypto.spec.PBEKeySpec(passphrase, salt, 10000, 256)
+        val factory = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+        val derivedKey = factory.generateSecret(keySpec).encoded
+        val secretKey = SecretKeySpec(derivedKey, "AES")
+
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        val gcmSpec = GCMParameterSpec(GCM_TAG_SIZE_BITS, iv)
+        cipher.init(Cipher.DECRYPT_MODE, secretKey, gcmSpec)
+        return cipher.doFinal(ciphertext)
+    }
 }

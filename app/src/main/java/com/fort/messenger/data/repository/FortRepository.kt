@@ -16,6 +16,11 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.util.UUID
 
+class ExistingRemoteKeysException(
+    val userId: String,
+    override val message: String
+) : IllegalStateException(message)
+
 class FortRepository(
     private val database: FortDatabase,
     private val remoteBackend: FortRemoteBackend,
@@ -126,7 +131,11 @@ class FortRepository(
         return Result.success(account)
     }
 
-    private suspend fun restoreOrInitLocalAccount(remoteUser: RemoteUserAccount, displayName: String): Result<UserAccountEntity> {
+    private suspend fun restoreOrInitLocalAccount(
+        remoteUser: RemoteUserAccount,
+        displayName: String,
+        forceKeyReset: Boolean = false
+    ): Result<UserAccountEntity> {
         val existing = database.userAccountDao().getActiveAccountOnce()
         if (existing != null && existing.userId == remoteUser.userId) {
             return Result.success(existing)
@@ -154,6 +163,18 @@ class FortRepository(
             database.userAccountDao().insertAccount(restoredAccount)
             return Result.success(restoredAccount)
         }
+
+        // Fresh install / new device: check if account already has public identity keys registered
+        val remotePersonalKey = remoteBackend.fetchPublicKey(remoteUser.userId, CardType.PERSONAL.name).getOrNull()
+        if (!remotePersonalKey.isNullOrBlank() && !forceKeyReset) {
+            return Result.failure(
+                ExistingRemoteKeysException(
+                    userId = remoteUser.userId,
+                    message = "Existing identity keys found for this account. Signing in on a new device requires restoring your encrypted key backup, or confirming an explicit key reset. Note: Key reset will replace your identity keys and older encrypted messages will no longer be decryptable."
+                )
+            )
+        }
+
         return initLocalUserAccount(remoteUser, displayName)
     }
 
@@ -166,29 +187,111 @@ class FortRepository(
         return initLocalUserAccount(remoteUser, displayName)
     }
 
-    suspend fun login(email: String, password: String): Result<UserAccountEntity> {
+    suspend fun login(email: String, password: String, forceKeyReset: Boolean = false): Result<UserAccountEntity> {
         val remoteResult = remoteBackend.login(email, password)
         if (remoteResult.isFailure) return Result.failure(remoteResult.exceptionOrNull()!!)
         val remoteUser = remoteResult.getOrThrow()
-        return restoreOrInitLocalAccount(remoteUser, remoteUser.displayName)
+        return restoreOrInitLocalAccount(remoteUser, remoteUser.displayName, forceKeyReset)
+    }
+
+    suspend fun confirmKeyReset(remoteUser: RemoteUserAccount, displayName: String = ""): Result<UserAccountEntity> {
+        return restoreOrInitLocalAccount(remoteUser, displayName.ifBlank { remoteUser.displayName }, forceKeyReset = true)
+    }
+
+    suspend fun exportEncryptedKeyBackup(userId: String, passphrase: String): Result<String> {
+        return try {
+            val cards = database.personaCardDao().getCardsForUserOnce(userId)
+            if (cards.isEmpty()) {
+                return Result.failure(IllegalStateException("No persona cards found to backup."))
+            }
+            val jsonArray = org.json.JSONArray()
+            cards.forEach { card ->
+                val obj = org.json.JSONObject().apply {
+                    put("cardId", card.cardId)
+                    put("userId", card.userId)
+                    put("type", card.type.name)
+                    put("displayName", card.displayName)
+                    put("handle", card.handle)
+                    put("bio", card.bio)
+                    put("avatarEmoji", card.avatarEmoji)
+                    put("publicKey", card.publicKey)
+                    put("privateKeyEncrypted", card.privateKeyEncrypted)
+                    put("businessHoursOnly", card.businessHoursOnly)
+                    put("moodSharingEnabled", card.moodSharingEnabled)
+                }
+                jsonArray.put(obj)
+            }
+            val jsonBytes = jsonArray.toString().toByteArray(Charsets.UTF_8)
+            val encrypted = FortCryptoManager.encryptWithPassphrase(jsonBytes, passphrase.toCharArray())
+            Result.success(encrypted)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun restoreEncryptedKeyBackup(
+        remoteUser: RemoteUserAccount,
+        passphrase: String,
+        backupCiphertext: String
+    ): Result<UserAccountEntity> {
+        return try {
+            val decryptedBytes = FortCryptoManager.decryptWithPassphrase(backupCiphertext, passphrase.toCharArray())
+            val jsonStr = String(decryptedBytes, Charsets.UTF_8)
+            val jsonArray = org.json.JSONArray(jsonStr)
+            val cards = mutableListOf<PersonaCardEntity>()
+            for (i in 0 until jsonArray.length()) {
+                val obj = jsonArray.getJSONObject(i)
+                val card = PersonaCardEntity(
+                    cardId = obj.getString("cardId"),
+                    userId = obj.getString("userId"),
+                    type = CardType.valueOf(obj.getString("type")),
+                    displayName = obj.getString("displayName"),
+                    handle = obj.getString("handle"),
+                    bio = obj.getString("bio"),
+                    avatarEmoji = obj.getString("avatarEmoji"),
+                    publicKey = obj.getString("publicKey"),
+                    privateKeyEncrypted = obj.getString("privateKeyEncrypted"),
+                    businessHoursOnly = obj.optBoolean("businessHoursOnly", false),
+                    moodSharingEnabled = obj.optBoolean("moodSharingEnabled", true)
+                )
+                cards.add(card)
+            }
+            database.personaCardDao().insertCards(cards)
+            restoreOrInitLocalAccount(remoteUser, remoteUser.displayName, forceKeyReset = false)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
     suspend fun sendPhoneOtp(phoneNumber: String, activity: Activity? = null): Result<String> {
         return remoteBackend.sendPhoneOtp(phoneNumber, activity)
     }
 
-    suspend fun verifyPhoneOtp(verificationId: String, code: String, displayName: String): Result<UserAccountEntity> {
+    suspend fun verifyPhoneOtp(
+        verificationId: String,
+        code: String,
+        displayName: String,
+        forceKeyReset: Boolean = false
+    ): Result<UserAccountEntity> {
         val result = remoteBackend.verifyPhoneOtp(verificationId, code, displayName)
         if (result.isFailure) return Result.failure(result.exceptionOrNull()!!)
         val remoteUser = result.getOrThrow()
-        return restoreOrInitLocalAccount(remoteUser, displayName.ifBlank { "Phone User ${remoteUser.phoneNumber?.takeLast(4) ?: "Sovereign"}" })
+        return restoreOrInitLocalAccount(
+            remoteUser,
+            displayName.ifBlank { "Phone User ${remoteUser.phoneNumber?.takeLast(4) ?: "Sovereign"}" },
+            forceKeyReset
+        )
     }
 
-    suspend fun loginWithGoogle(idToken: String, displayName: String): Result<UserAccountEntity> {
+    suspend fun loginWithGoogle(
+        idToken: String,
+        displayName: String,
+        forceKeyReset: Boolean = false
+    ): Result<UserAccountEntity> {
         val result = remoteBackend.loginWithGoogle(idToken, displayName)
         if (result.isFailure) return Result.failure(result.exceptionOrNull()!!)
         val remoteUser = result.getOrThrow()
-        return restoreOrInitLocalAccount(remoteUser, displayName.ifBlank { "Google User" })
+        return restoreOrInitLocalAccount(remoteUser, displayName.ifBlank { "Google User" }, forceKeyReset)
     }
 
     suspend fun sendPasswordReset(email: String): Result<Unit> {

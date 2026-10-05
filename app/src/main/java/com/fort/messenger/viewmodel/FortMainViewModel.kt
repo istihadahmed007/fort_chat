@@ -974,40 +974,60 @@ class FortMainViewModel @JvmOverloads constructor(
 
     // --- WebRTC Audio & Video Calling ---
 
+    private fun hasRequiredCallPermissions(callType: CallType): Boolean {
+        val hasAudio = androidx.core.content.ContextCompat.checkSelfPermission(
+            getApplication(), android.Manifest.permission.RECORD_AUDIO
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        val hasVideo = callType != CallType.VIDEO || androidx.core.content.ContextCompat.checkSelfPermission(
+            getApplication(), android.Manifest.permission.CAMERA
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        return hasAudio && hasVideo
+    }
+
     fun startCall(peerUserId: String, peerDisplayName: String, callType: CallType) {
+        val user = _uiState.value.currentUserAccount ?: return
+        val callId = "call_${UUID.randomUUID()}"
+        val session = CallSession(
+            callId = callId,
+            peerUserId = peerUserId,
+            peerDisplayName = peerDisplayName,
+            isCaller = true,
+            callType = callType,
+            status = CallStatus.OUTGOING_RINGING
+        )
+        _uiState.update { it.copy(activeCallSession = session) }
+
+        if (hasRequiredCallPermissions(callType)) {
+            launchOutgoingCallWithPermissions(session)
+        }
+        // If permissions missing, CallScreenModal requests them and invokes onCallPermissionsGranted()
+    }
+
+    private fun launchOutgoingCallWithPermissions(session: CallSession) {
+        if (webrtcManager != null) return
         val user = _uiState.value.currentUserAccount ?: return
         viewModelScope.launch {
             val myName = _uiState.value.connectionCards.firstOrNull()?.displayName ?: user.email.substringBefore("@")
-            val callId = "call_${UUID.randomUUID()}"
             val record = RemoteCallRecord(
-                callId = callId,
+                callId = session.callId,
                 callerUserId = user.userId,
                 callerDisplayName = myName,
-                receiverUserId = peerUserId,
-                callType = callType.name,
+                receiverUserId = session.peerUserId,
+                callType = session.callType.name,
                 status = "RINGING"
             )
             val result = repository.createCall(record)
             if (result.isSuccess) {
-                val session = CallSession(
-                    callId = callId,
-                    peerUserId = peerUserId,
-                    peerDisplayName = peerDisplayName,
-                    isCaller = true,
-                    callType = callType,
-                    status = CallStatus.OUTGOING_RINGING
-                )
-                _uiState.update { it.copy(activeCallSession = session) }
                 initWebRtcForCall(session, isInitiator = true)
             } else {
                 val err = result.exceptionOrNull()?.message ?: "Could not start call."
+                endCall()
                 _uiState.update { it.copy(toastMessage = err) }
             }
         }
     }
 
     fun acceptIncomingCall() {
-        val user = _uiState.value.currentUserAccount ?: return
         val incoming = _uiState.value.incomingCallSession ?: return
         _uiState.update {
             it.copy(
@@ -1015,9 +1035,18 @@ class FortMainViewModel @JvmOverloads constructor(
                 activeCallSession = incoming.copy(status = CallStatus.CONNECTING)
             )
         }
+        if (hasRequiredCallPermissions(incoming.callType)) {
+            launchAcceptedIncomingCallWithPermissions(incoming)
+        }
+        // If permissions missing, CallScreenModal requests them and triggers onCallPermissionsGranted()
+    }
+
+    private fun launchAcceptedIncomingCallWithPermissions(session: CallSession) {
+        if (webrtcManager != null) return
+        val user = _uiState.value.currentUserAccount ?: return
         viewModelScope.launch {
-            repository.updateCallStatus(incoming.callId, "ACCEPTED", user.userId)
-            initWebRtcForCall(incoming, isInitiator = false)
+            repository.updateCallStatus(session.callId, "ACCEPTED", user.userId)
+            initWebRtcForCall(session, isInitiator = false)
         }
     }
 
@@ -1071,7 +1100,15 @@ class FortMainViewModel @JvmOverloads constructor(
 
     fun onCallPermissionsGranted() {
         val session = _uiState.value.activeCallSession ?: return
-        webrtcManager?.startLocalMedia(session.callType)
+        if (webrtcManager == null) {
+            if (session.isCaller) {
+                launchOutgoingCallWithPermissions(session)
+            } else {
+                launchAcceptedIncomingCallWithPermissions(session)
+            }
+        } else {
+            webrtcManager?.startLocalMedia(session.callType)
+        }
     }
 
     private fun initWebRtcForCall(session: CallSession, isInitiator: Boolean) {
@@ -1097,16 +1134,9 @@ class FortMainViewModel @JvmOverloads constructor(
         webrtcManager = manager
         manager.init()
 
-        // Only start local media if permission is already granted; otherwise deferred until onCallPermissionsGranted()
-        val hasAudio = androidx.core.content.ContextCompat.checkSelfPermission(
-            getApplication(), android.Manifest.permission.RECORD_AUDIO
-        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-        val hasVideo = session.callType != CallType.VIDEO || androidx.core.content.ContextCompat.checkSelfPermission(
-            getApplication(), android.Manifest.permission.CAMERA
-        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-        if (hasAudio && hasVideo) {
-            manager.startLocalMedia(session.callType)
-        }
+        // Create permitted local tracks before creating peer connection
+        // so the first negotiated SDP offer or answer contains valid media tracks
+        manager.startLocalMedia(session.callType)
         manager.createPeerConnection()
 
         activeCallJob = viewModelScope.launch {
