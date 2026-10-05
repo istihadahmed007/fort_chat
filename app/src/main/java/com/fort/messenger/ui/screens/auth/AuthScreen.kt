@@ -70,6 +70,17 @@ fun AuthScreen(
     var showForgotPasswordDialog by remember { mutableStateOf(false) }
     var recoveryEmail by remember { mutableStateOf("") }
     var showSetupGuideDialog by remember { mutableStateOf(false) }
+    var recoveryBackupPassphrase by remember { mutableStateOf("") }
+    var recoveryBackupCiphertext by remember { mutableStateOf("") }
+    var showResetKeyConfirmation by remember { mutableStateOf(false) }
+
+    LaunchedEffect(uiState.isKeyRecoveryRequired) {
+        if (!uiState.isKeyRecoveryRequired) {
+            recoveryBackupPassphrase = ""
+            recoveryBackupCiphertext = ""
+            showResetKeyConfirmation = false
+        }
+    }
 
     val scrollState = rememberScrollState()
 
@@ -526,6 +537,110 @@ fun AuthScreen(
                 )
             }
         }
+    }
+
+    // Existing remote identity recovery after signing in on a new device
+    if (uiState.isKeyRecoveryRequired) {
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissIdentityKeyRecovery() },
+            title = { Text("Restore your Fort identity", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        "This account already has identity keys. Restore the encrypted backup to keep the same identity on this device.",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        "Without a backup, you can reset the keys. Older encrypted messages will no longer be decryptable.",
+                        fontSize = 12.sp,
+                        color = RoseDestructive
+                    )
+                    OutlinedTextField(
+                        value = recoveryBackupPassphrase,
+                        onValueChange = { recoveryBackupPassphrase = it },
+                        label = { Text("Backup passphrase (12+ characters)") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = recoveryBackupCiphertext,
+                        onValueChange = { recoveryBackupCiphertext = it },
+                        label = { Text("Encrypted identity backup") },
+                        minLines = 3,
+                        maxLines = 6,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (uiState.identityBackupError != null) {
+                        Text(
+                            uiState.identityBackupError!!,
+                            color = RoseDestructive,
+                            fontSize = 12.sp
+                        )
+                    }
+                    if (uiState.isAuthLoading) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.restoreIdentityKeyBackup(recoveryBackupPassphrase, recoveryBackupCiphertext)
+                    },
+                    enabled = !uiState.isAuthLoading
+                        && recoveryBackupPassphrase.length >= 12
+                        && recoveryBackupCiphertext.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary)
+                ) {
+                    Text("Restore backup")
+                }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(
+                        onClick = { viewModel.dismissIdentityKeyRecovery() },
+                        enabled = !uiState.isAuthLoading
+                    ) { Text("Cancel") }
+                    TextButton(
+                        onClick = { showResetKeyConfirmation = true },
+                        enabled = !uiState.isAuthLoading
+                    ) { Text("Reset keys", color = RoseDestructive) }
+                }
+            }
+        )
+    }
+
+    if (showResetKeyConfirmation && uiState.isKeyRecoveryRequired) {
+        AlertDialog(
+            onDismissRequest = { showResetKeyConfirmation = false },
+            title = { Text("Reset identity keys?", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "This replaces the keys registered to your account. You will lose access to older messages encrypted to the previous keys. Continue only if you cannot restore a backup.",
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showResetKeyConfirmation = false
+                        viewModel.confirmIdentityKeyReset()
+                    },
+                    enabled = !uiState.isAuthLoading,
+                    colors = ButtonDefaults.buttonColors(containerColor = RoseDestructive)
+                ) { Text("Reset and continue") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showResetKeyConfirmation = false }) { Text("Keep current keys") }
+            }
+        )
     }
 
     // Password Reset Modal

@@ -17,3 +17,7 @@ functions/node_modules/
 *-debug.log
 .firebase/
 
+
+# Local Firebase Functions configuration can contain deployment secrets.
+functions/.env*
+!functions/.env.example

@@ -205,17 +205,13 @@ exports.lookupUserByPhone = functions.https.onCall(async (data, context) => {
 
   const requesterUid = context.auth.uid;
 
-  // 1. Verify requester has verified their phone number
-  const hasAuthPhone = !!context.auth.token.phone_number;
-  if (!hasAuthPhone) {
-    const requesterDoc = await db.collection("users").doc(requesterUid).get();
-    const userPhone = requesterDoc.exists ? requesterDoc.data().phoneNumber : null;
-    if (!userPhone) {
-      throw new functions.https.HttpsError(
-        "permission-denied",
-        "Phone verification is required before you can discover peers by phone."
-      );
-    }
+  // Only Firebase Auth's signed token proves phone verification. Profile fields are client data.
+  const verifiedRequesterPhone = context.auth.token.phone_number;
+  if (typeof verifiedRequesterPhone !== "string" || !/^\+[1-9]\d{7,14}$/.test(verifiedRequesterPhone)) {
+    throw new functions.https.HttpsError(
+      "permission-denied",
+      "Phone verification is required before you can discover peers by phone."
+    );
   }
 
   // 2. Enforce strict server-side rate limiting (max 10 lookups per 15 minutes per user)
@@ -250,20 +246,23 @@ exports.lookupUserByPhone = functions.https.onCall(async (data, context) => {
     );
   }
 
-  // 4. Query private users collection server-side by exact normalized phone
-  const snapshot = await db
-    .collection("users")
-    .where("phoneNumber", "==", normalized)
-    .limit(1)
-    .get();
-
-  if (snapshot.empty) {
-    return { user: null };
+  // Resolve the target through Firebase Auth's verified phone index, never a client-writable profile field.
+  let targetAuthUser;
+  try {
+    targetAuthUser = await admin.auth().getUserByPhoneNumber(normalized);
+  } catch (error) {
+    if (error && error.code === "auth/user-not-found") {
+      return { user: null };
+    }
+    throw error;
   }
 
-  const targetDoc = snapshot.docs[0];
+  const targetUid = targetAuthUser.uid;
+  const targetDoc = await db.collection("users").doc(targetUid).get();
+  if (!targetDoc.exists) {
+    return { user: null };
+  }
   const targetData = targetDoc.data() || {};
-  const targetUid = targetData.userId || targetDoc.id;
 
   // Cannot discover self
   if (targetUid === requesterUid) {
@@ -301,5 +300,50 @@ exports.lookupUserByPhone = functions.https.onCall(async (data, context) => {
       avatarEmoji: "🛡️",
       hasVerifiedPhone: true,
     },
+  };
+});
+
+
+/**
+ * Returns short-lived Coturn REST credentials. Configure FORT_TURN_HOSTS and
+ * FORT_TURN_SHARED_SECRET in the Functions environment; secrets never go to the APK.
+ */
+exports.getTurnCredentials = functions.https.onCall(async (_data, context) => {
+  if (!context.auth || !context.auth.uid) {
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      "Authentication is required to obtain call network credentials."
+    );
+  }
+
+  const secret = process.env.FORT_TURN_SHARED_SECRET || "";
+  const urls = (process.env.FORT_TURN_HOSTS || "")
+    .split(",")
+    .map((url) => url.trim())
+    .filter(Boolean);
+
+  if (!secret || urls.length === 0) {
+    return { servers: [] };
+  }
+  if (urls.some((url) => !/^turns?:[^\s]+$/i.test(url))) {
+    throw new functions.https.HttpsError(
+      "failed-precondition",
+      "TURN service configuration is invalid."
+    );
+  }
+
+  const requestedTtl = Number.parseInt(process.env.FORT_TURN_TTL_SECONDS || "3600", 10);
+  const ttlSeconds = Number.isFinite(requestedTtl)
+    ? Math.min(Math.max(requestedTtl, 300), 86400)
+    : 3600;
+  const expiresAt = Math.floor(Date.now() / 1000) + ttlSeconds;
+  const username = `${expiresAt}:${context.auth.uid}`;
+  const credential = crypto
+    .createHmac("sha1", secret)
+    .update(username)
+    .digest("base64");
+
+  return {
+    servers: [{ urls, username, credential, expiresAt }],
   };
 });

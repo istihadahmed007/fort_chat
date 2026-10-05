@@ -890,6 +890,29 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
         Unit
     }
 
+    override suspend fun fetchTurnServerConfigs(requesterUserId: String): Result<List<TurnServerConfig>> = capture {
+        requireCaller(requesterUserId)
+        val response = functions.getHttpsCallable("getTurnCredentials").call().await().getData() as? Map<*, *>
+            ?: throw IllegalStateException("Invalid response from TURN credential service.")
+        val rawServers = response["servers"] as? List<*> ?: return@capture emptyList()
+
+        rawServers.mapNotNull { rawServer ->
+            val server = rawServer as? Map<*, *> ?: return@mapNotNull null
+            val urls = when (val rawUrls = server["urls"]) {
+                is String -> listOf(rawUrls)
+                is List<*> -> rawUrls.filterIsInstance<String>()
+                else -> emptyList()
+            }.filter { it.startsWith("turn:", ignoreCase = true) || it.startsWith("turns:", ignoreCase = true) }
+            val username = server["username"] as? String
+            val credential = server["credential"] as? String
+            if (urls.isEmpty() || username.isNullOrBlank() || credential.isNullOrBlank()) {
+                null
+            } else {
+                TurnServerConfig(urls = urls, username = username, credential = credential)
+            }
+        }
+    }
+
     override suspend fun updateCallStatus(callId: String, status: String, requesterUserId: String): Result<Unit> = capture {
         requireSignedInUserId()
         firestore.collection("calls").document(callId).update(

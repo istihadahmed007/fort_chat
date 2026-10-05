@@ -42,6 +42,12 @@ data class RtcIceCandidateRecord(
     val serverUrl: String = ""
 )
 
+data class TurnServerConfig(
+    val urls: List<String>,
+    val username: String,
+    val credential: String
+)
+
 data class RtcSessionDescriptionRecord(
     val type: String, // "offer" or "answer"
     val sdp: String

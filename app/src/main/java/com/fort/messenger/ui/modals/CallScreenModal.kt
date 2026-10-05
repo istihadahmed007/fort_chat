@@ -86,11 +86,13 @@ fun CallScreenModal(
         )
     }
     var permissionDenied by remember { mutableStateOf(false) }
+    var permissionCallbackSent by remember(session.callId) { mutableStateOf(false) }
 
     val isPermissionGranted = hasAudioPermission && (session.callType != CallType.VIDEO || hasCameraPermission)
 
-    LaunchedEffect(isPermissionGranted) {
-        if (isPermissionGranted) {
+    LaunchedEffect(isPermissionGranted, session.callId) {
+        if (isPermissionGranted && !permissionCallbackSent) {
+            permissionCallbackSent = true
             permissionDenied = false
             onPermissionGranted()
         }
@@ -101,23 +103,15 @@ fun CallScreenModal(
     ) { perms ->
         hasAudioPermission = perms[Manifest.permission.RECORD_AUDIO] == true
         hasCameraPermission = perms[Manifest.permission.CAMERA] == true
-        val granted = hasAudioPermission && (session.callType != CallType.VIDEO || hasCameraPermission)
-        if (granted) {
-            permissionDenied = false
-            onPermissionGranted()
-        } else {
-            permissionDenied = true
-        }
+        permissionDenied = !(hasAudioPermission && (session.callType != CallType.VIDEO || hasCameraPermission))
     }
 
-    LaunchedEffect(session.callType) {
+    LaunchedEffect(session.callType, session.callId) {
         val needed = mutableListOf<String>()
         if (!hasAudioPermission) needed.add(Manifest.permission.RECORD_AUDIO)
         if (session.callType == CallType.VIDEO && !hasCameraPermission) needed.add(Manifest.permission.CAMERA)
         if (needed.isNotEmpty()) {
             permissionsLauncher.launch(needed.toTypedArray())
-        } else {
-            onPermissionGranted()
         }
     }
 

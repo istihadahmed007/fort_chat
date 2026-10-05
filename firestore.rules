@@ -11,10 +11,20 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    function phoneNumberMatchesVerifiedAuth(data) {
+      return !('phoneNumber' in data)
+        || data.phoneNumber == null
+        || data.phoneNumber == request.auth.token.get('phone_number', null);
+    }
+
     // 1. Private User Accounts (Strictly Owner-Only: No broad reads of email or phone)
     match /users/{userId} {
       allow read: if isOwner(userId);
-      allow create, update, delete: if isOwner(userId);
+      allow create: if isOwner(userId) && phoneNumberMatchesVerifiedAuth(request.resource.data);
+      allow update: if isOwner(userId)
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['phoneNumber'])
+          || phoneNumberMatchesVerifiedAuth(request.resource.data));
+      allow delete: if isOwner(userId);
 
       match /cards/{cardId} {
         allow read: if isAuthenticated();

@@ -8,6 +8,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.fort.messenger.data.local.*
 import com.fort.messenger.data.remote.FortBackendFactory
+import com.fort.messenger.data.remote.RemoteUserAccount
+import com.fort.messenger.data.repository.ExistingRemoteKeysException
 import com.fort.messenger.data.repository.FortRepository
 import com.fort.messenger.model.*
 import com.fort.messenger.security.ContactPassPayload
@@ -45,6 +47,10 @@ data class FortUiState(
     val isInitializing: Boolean = true,
     val isAuthLoading: Boolean = false,
     val authErrorMessage: String? = null,
+    val isKeyRecoveryRequired: Boolean = false,
+    val isIdentityBackupLoading: Boolean = false,
+    val identityBackupText: String? = null,
+    val identityBackupError: String? = null,
     val authVerificationId: String? = null, // for phone OTP flow
     val currentUserAccount: UserAccountEntity? = null,
     val connectionCards: List<ConnectionCard> = emptyList(),
@@ -125,6 +131,8 @@ class FortMainViewModel @JvmOverloads constructor(
     private var realtimeInboundKnockJob: kotlinx.coroutines.Job? = null
     private var realtimeOutboundKnockJob: kotlinx.coroutines.Job? = null
     private var searchJob: kotlinx.coroutines.Job? = null
+    private var pendingKeyRecoveryUser: RemoteUserAccount? = null
+    private var initializingCallId: String? = null
 
     init {
         initializeAccountAndData()
@@ -528,8 +536,7 @@ class FortMainViewModel @JvmOverloads constructor(
                 }
                 observeUserData(acc.userId)
             } else {
-                val err = result.exceptionOrNull()?.message ?: "Login failed."
-                _uiState.update { it.copy(authErrorMessage = err, toastMessage = err) }
+                handleAuthenticationFailure(result.exceptionOrNull(), "Login failed.")
             }
         }
     }
@@ -559,8 +566,7 @@ class FortMainViewModel @JvmOverloads constructor(
                 }
                 observeUserData(acc.userId)
             } else {
-                val err = result.exceptionOrNull()?.message ?: "Registration failed."
-                _uiState.update { it.copy(authErrorMessage = err, toastMessage = err) }
+                handleAuthenticationFailure(result.exceptionOrNull(), "Registration failed.")
             }
         }
     }
@@ -619,8 +625,7 @@ class FortMainViewModel @JvmOverloads constructor(
                 }
                 observeUserData(acc.userId)
             } else {
-                val err = result.exceptionOrNull()?.message ?: "OTP verification failed."
-                _uiState.update { it.copy(authErrorMessage = err, toastMessage = err) }
+                handleAuthenticationFailure(result.exceptionOrNull(), "OTP verification failed.")
             }
         }
     }
@@ -642,10 +647,134 @@ class FortMainViewModel @JvmOverloads constructor(
                 }
                 observeUserData(acc.userId)
             } else {
-                val err = result.exceptionOrNull()?.message ?: "Google sign in failed."
-                _uiState.update { it.copy(authErrorMessage = err, toastMessage = err) }
+                handleAuthenticationFailure(result.exceptionOrNull(), "Google sign in failed.")
             }
         }
+    }
+
+    private fun handleAuthenticationFailure(error: Throwable?, fallbackMessage: String) {
+        if (error is ExistingRemoteKeysException) {
+            pendingKeyRecoveryUser = error.remoteUser
+            _uiState.update {
+                it.copy(
+                    isAuthLoading = false,
+                    isKeyRecoveryRequired = true,
+                    authErrorMessage = null,
+                    identityBackupError = null,
+                    identityBackupText = null
+                )
+            }
+            return
+        }
+
+        val message = error?.message ?: fallbackMessage
+        _uiState.update { it.copy(isAuthLoading = false, authErrorMessage = message, toastMessage = message) }
+    }
+
+    fun exportIdentityKeyBackup(passphrase: String) {
+        val user = _uiState.value.currentUserAccount
+        if (user == null) {
+            _uiState.update { it.copy(identityBackupError = "Sign in before exporting an identity backup.") }
+            return
+        }
+        if (passphrase.length < 12) {
+            _uiState.update { it.copy(identityBackupError = "Use a backup passphrase with at least 12 characters.") }
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(isIdentityBackupLoading = true, identityBackupText = null, identityBackupError = null)
+            }
+            val result = repository.exportEncryptedKeyBackup(user.userId, passphrase)
+            _uiState.update {
+                it.copy(
+                    isIdentityBackupLoading = false,
+                    identityBackupText = result.getOrNull(),
+                    identityBackupError = result.exceptionOrNull()?.message
+                )
+            }
+        }
+    }
+
+    fun clearIdentityKeyBackup() {
+        _uiState.update {
+            it.copy(isIdentityBackupLoading = false, identityBackupText = null, identityBackupError = null)
+        }
+    }
+
+    fun dismissIdentityKeyRecovery() {
+        pendingKeyRecoveryUser = null
+        _uiState.update {
+            it.copy(
+                isKeyRecoveryRequired = false,
+                identityBackupError = null,
+                identityBackupText = null
+            )
+        }
+    }
+
+    fun restoreIdentityKeyBackup(passphrase: String, backupCiphertext: String) {
+        val remoteUser = pendingKeyRecoveryUser
+        if (remoteUser == null) {
+            _uiState.update { it.copy(identityBackupError = "Sign in again before restoring this backup.") }
+            return
+        }
+        if (backupCiphertext.isBlank()) {
+            _uiState.update { it.copy(identityBackupError = "Paste your encrypted identity backup.") }
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(isAuthLoading = true, identityBackupError = null) }
+            val result = repository.restoreEncryptedKeyBackup(remoteUser, passphrase, backupCiphertext.trim())
+            finishIdentityRecovery(result, "Encrypted identity backup restored.")
+        }
+    }
+
+    fun confirmIdentityKeyReset() {
+        val remoteUser = pendingKeyRecoveryUser
+        if (remoteUser == null) {
+            _uiState.update { it.copy(identityBackupError = "Sign in again before resetting identity keys.") }
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(isAuthLoading = true, identityBackupError = null) }
+            val result = repository.confirmKeyReset(remoteUser)
+            finishIdentityRecovery(result, "New identity keys created.")
+        }
+    }
+
+    private fun finishIdentityRecovery(result: Result<UserAccountEntity>, successMessage: String) {
+        if (result.isFailure) {
+            val error = result.exceptionOrNull()?.message ?: "Identity recovery failed."
+            _uiState.update {
+                it.copy(
+                    isAuthLoading = false,
+                    isKeyRecoveryRequired = true,
+                    identityBackupError = error
+                )
+            }
+            return
+        }
+
+        val account = result.getOrThrow()
+        pendingKeyRecoveryUser = null
+        _uiState.update {
+            it.copy(
+                isAuthLoading = false,
+                currentUserAccount = account,
+                activeCardId = account.activeCardId,
+                isKeyRecoveryRequired = false,
+                identityBackupText = null,
+                identityBackupError = null,
+                authVerificationId = null,
+                authErrorMessage = null,
+                toastMessage = successMessage
+            )
+        }
+        observeUserData(account.userId)
     }
 
     fun sendPasswordReset(email: String) {
@@ -671,6 +800,8 @@ class FortMainViewModel @JvmOverloads constructor(
     }
 
     fun logout() {
+        initializingCallId = null
+        pendingKeyRecoveryUser = null
         teardownWebRtc()
         LiveLocationService.stop(getApplication())
         realtimePacketsJob?.cancel()
@@ -1004,25 +1135,40 @@ class FortMainViewModel @JvmOverloads constructor(
     }
 
     private fun launchOutgoingCallWithPermissions(session: CallSession) {
-        if (webrtcManager != null) return
+        if (webrtcManager != null || initializingCallId != null) return
+        if (_uiState.value.activeCallSession?.callId != session.callId) return
         val user = _uiState.value.currentUserAccount ?: return
+        initializingCallId = session.callId
+
         viewModelScope.launch {
-            val myName = _uiState.value.connectionCards.firstOrNull()?.displayName ?: user.email.substringBefore("@")
-            val record = RemoteCallRecord(
-                callId = session.callId,
-                callerUserId = user.userId,
-                callerDisplayName = myName,
-                receiverUserId = session.peerUserId,
-                callType = session.callType.name,
-                status = "RINGING"
-            )
-            val result = repository.createCall(record)
-            if (result.isSuccess) {
-                initWebRtcForCall(session, isInitiator = true)
-            } else {
-                val err = result.exceptionOrNull()?.message ?: "Could not start call."
-                endCall()
-                _uiState.update { it.copy(toastMessage = err) }
+            try {
+                val myName = _uiState.value.connectionCards.firstOrNull()?.displayName ?: user.email.substringBefore("@")
+                val record = RemoteCallRecord(
+                    callId = session.callId,
+                    callerUserId = user.userId,
+                    callerDisplayName = myName,
+                    receiverUserId = session.peerUserId,
+                    callType = session.callType.name,
+                    status = "RINGING"
+                )
+                val result = repository.createCall(record)
+                if (_uiState.value.activeCallSession?.callId != session.callId) return@launch
+                if (result.isSuccess) {
+                    initWebRtcForCall(session, isInitiator = true)
+                } else {
+                    val err = result.exceptionOrNull()?.message ?: "Could not start call."
+                    endCall()
+                    _uiState.update { it.copy(toastMessage = err) }
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (_uiState.value.activeCallSession?.callId == session.callId) {
+                    endCall()
+                    _uiState.update { it.copy(toastMessage = error.message ?: "Could not start call." ) }
+                }
+            } finally {
+                if (initializingCallId == session.callId) initializingCallId = null
             }
         }
     }
@@ -1042,11 +1188,32 @@ class FortMainViewModel @JvmOverloads constructor(
     }
 
     private fun launchAcceptedIncomingCallWithPermissions(session: CallSession) {
-        if (webrtcManager != null) return
+        if (webrtcManager != null || initializingCallId != null) return
+        if (_uiState.value.activeCallSession?.callId != session.callId) return
         val user = _uiState.value.currentUserAccount ?: return
+        initializingCallId = session.callId
+
         viewModelScope.launch {
-            repository.updateCallStatus(session.callId, "ACCEPTED", user.userId)
-            initWebRtcForCall(session, isInitiator = false)
+            try {
+                val accepted = repository.updateCallStatus(session.callId, "ACCEPTED", user.userId)
+                if (_uiState.value.activeCallSession?.callId != session.callId) return@launch
+                if (accepted.isFailure) {
+                    val err = accepted.exceptionOrNull()?.message ?: "Could not accept call."
+                    endCall()
+                    _uiState.update { it.copy(toastMessage = err) }
+                    return@launch
+                }
+                initWebRtcForCall(session, isInitiator = false)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (_uiState.value.activeCallSession?.callId == session.callId) {
+                    endCall()
+                    _uiState.update { it.copy(toastMessage = error.message ?: "Could not accept call." ) }
+                }
+            } finally {
+                if (initializingCallId == session.callId) initializingCallId = null
+            }
         }
     }
 
@@ -1060,6 +1227,7 @@ class FortMainViewModel @JvmOverloads constructor(
     }
 
     fun endCall() {
+        initializingCallId = null
         val user = _uiState.value.currentUserAccount
         val active = _uiState.value.activeCallSession
         if (active != null && user != null) {
@@ -1099,21 +1267,25 @@ class FortMainViewModel @JvmOverloads constructor(
     }
 
     fun onCallPermissionsGranted() {
+        if (webrtcManager != null || initializingCallId != null) return
         val session = _uiState.value.activeCallSession ?: return
-        if (webrtcManager == null) {
-            if (session.isCaller) {
-                launchOutgoingCallWithPermissions(session)
-            } else {
-                launchAcceptedIncomingCallWithPermissions(session)
-            }
+        if (session.isCaller) {
+            launchOutgoingCallWithPermissions(session)
         } else {
-            webrtcManager?.startLocalMedia(session.callType)
+            launchAcceptedIncomingCallWithPermissions(session)
         }
     }
 
-    private fun initWebRtcForCall(session: CallSession, isInitiator: Boolean) {
+    private suspend fun initWebRtcForCall(session: CallSession, isInitiator: Boolean) {
         val user = _uiState.value.currentUserAccount ?: return
-        teardownWebRtc()
+        if (_uiState.value.activeCallSession?.callId != session.callId || webrtcManager != null) return
+
+        val turnServerConfigs = repository.fetchTurnServerConfigs(user.userId).getOrDefault(emptyList())
+        if (_uiState.value.activeCallSession?.callId != session.callId
+            || initializingCallId != session.callId
+            || webrtcManager != null
+        ) return
+
         val manager = WebRtcCallManager(
             context = getApplication(),
             onIceCandidateGenerated = { candidate ->
@@ -1129,9 +1301,11 @@ class FortMainViewModel @JvmOverloads constructor(
             },
             onCallDisconnected = { _ ->
                 endCall()
-            }
+            },
+            turnServerConfigs = turnServerConfigs
         )
         webrtcManager = manager
+        initializingCallId = null
         manager.init()
 
         // Create permitted local tracks before creating peer connection

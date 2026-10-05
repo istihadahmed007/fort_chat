@@ -120,6 +120,7 @@ interface FortRemoteBackend {
 
     // --- WebRTC Audio & Video Call Signaling ---
     suspend fun createCall(call: RemoteCallRecord): Result<Unit>
+    suspend fun fetchTurnServerConfigs(requesterUserId: String): Result<List<TurnServerConfig>>
     suspend fun updateCallStatus(callId: String, status: String, requesterUserId: String): Result<Unit>
     suspend fun setCallOffer(callId: String, sdp: String, requesterUserId: String): Result<Unit>
     suspend fun setCallAnswer(callId: String, sdp: String, requesterUserId: String): Result<Unit>
@@ -651,6 +652,14 @@ class InMemoryRemoteRelay : FortRemoteBackend {
         val callFlow = callStateFlows.getOrPut(call.callId) { MutableStateFlow(null) }
         callFlow.value = call
         return Result.success(Unit)
+    }
+
+    override suspend fun fetchTurnServerConfigs(requesterUserId: String): Result<List<TurnServerConfig>> {
+        return if (usersById.containsKey(requesterUserId)) {
+            Result.success(emptyList())
+        } else {
+            Result.failure(SecurityException("Sign in is required to obtain call network credentials."))
+        }
     }
 
     override suspend fun updateCallStatus(callId: String, status: String, requesterUserId: String): Result<Unit> {

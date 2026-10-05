@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -20,6 +21,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Fingerprint
@@ -32,22 +34,31 @@ import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -71,6 +82,9 @@ fun YouAccessMapScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val activeCard = uiState.connectionCards.find { it.id == uiState.activeCardId }
+    val clipboard = LocalClipboardManager.current
+    var showIdentityBackupDialog by remember { mutableStateOf(false) }
+    var identityBackupPassphrase by remember { mutableStateOf("") }
 
     Scaffold(
         topBar = {
@@ -135,6 +149,47 @@ fun YouAccessMapScreen(
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text("Sign Out", fontSize = 11.sp)
+                        }
+                    }
+                }
+            }
+
+            item {
+                SovereignCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Outlined.Key,
+                                contentDescription = null,
+                                tint = RoyalBluePrimary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    "Portable identity backup",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    "Restore your same keys on a new device.",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.clearIdentityKeyBackup()
+                                identityBackupPassphrase = ""
+                                showIdentityBackupDialog = true
+                            },
+                            enabled = uiState.currentUserAccount != null,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("Create encrypted backup")
                         }
                     }
                 }
@@ -646,6 +701,80 @@ fun YouAccessMapScreen(
                 }
             }
         }
+    }
+
+    if (showIdentityBackupDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showIdentityBackupDialog = false
+                identityBackupPassphrase = ""
+                viewModel.clearIdentityKeyBackup()
+            },
+            title = { Text("Encrypted identity backup", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 440.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        "Choose a passphrase with at least 12 characters. Store the encrypted backup and passphrase separately; the passphrase cannot be recovered for you.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = identityBackupPassphrase,
+                        onValueChange = { identityBackupPassphrase = it },
+                        label = { Text("Backup passphrase (12+ characters)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
+                    )
+                    if (uiState.isIdentityBackupLoading) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                    }
+                    if (uiState.identityBackupError != null) {
+                        Text(uiState.identityBackupError!!, color = RoseDestructive, fontSize = 12.sp)
+                    }
+                    uiState.identityBackupText?.let { backup ->
+                        OutlinedTextField(
+                            value = backup,
+                            onValueChange = {},
+                            label = { Text("Encrypted backup") },
+                            readOnly = true,
+                            minLines = 4,
+                            maxLines = 7,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        TextButton(
+                            onClick = { clipboard.setText(AnnotatedString(backup)) },
+                            modifier = Modifier.align(Alignment.End)
+                        ) {
+                            Text("Copy backup")
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { viewModel.exportIdentityKeyBackup(identityBackupPassphrase) },
+                    enabled = !uiState.isIdentityBackupLoading && identityBackupPassphrase.length >= 12,
+                    colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary)
+                ) {
+                    Text(if (uiState.identityBackupText == null) "Generate backup" else "Generate new backup")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showIdentityBackupDialog = false
+                        identityBackupPassphrase = ""
+                        viewModel.clearIdentityKeyBackup()
+                    }
+                ) { Text("Done") }
+            }
+        )
     }
 }
 

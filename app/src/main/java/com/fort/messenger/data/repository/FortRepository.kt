@@ -17,9 +17,11 @@ import java.time.ZoneId
 import java.util.UUID
 
 class ExistingRemoteKeysException(
-    val userId: String,
+    val remoteUser: RemoteUserAccount,
     override val message: String
-) : IllegalStateException(message)
+) : IllegalStateException(message) {
+    val userId: String get() = remoteUser.userId
+}
 
 class FortRepository(
     private val database: FortDatabase,
@@ -141,7 +143,7 @@ class FortRepository(
             return Result.success(existing)
         }
         val existingCards = database.personaCardDao().getCardsForUserOnce(remoteUser.userId)
-        if (existingCards.isNotEmpty()) {
+        if (existingCards.isNotEmpty() && !forceKeyReset) {
             val activeCardId = "card_${remoteUser.userId}_personal"
             val effectiveName = displayName.ifBlank {
                 remoteUser.displayName.ifBlank {
@@ -164,13 +166,17 @@ class FortRepository(
             return Result.success(restoredAccount)
         }
 
-        // Fresh install / new device: check if account already has public identity keys registered
-        val remotePersonalKey = remoteBackend.fetchPublicKey(remoteUser.userId, CardType.PERSONAL.name).getOrNull()
+        // Fresh install / new device: never rotate identity keys when the remote check failed.
+        val remotePersonalKeyResult = remoteBackend.fetchPublicKey(remoteUser.userId, CardType.PERSONAL.name)
+        if (remotePersonalKeyResult.isFailure) {
+            return Result.failure(remotePersonalKeyResult.exceptionOrNull()!!)
+        }
+        val remotePersonalKey = remotePersonalKeyResult.getOrNull()
         if (!remotePersonalKey.isNullOrBlank() && !forceKeyReset) {
             return Result.failure(
                 ExistingRemoteKeysException(
-                    userId = remoteUser.userId,
-                    message = "Existing identity keys found for this account. Signing in on a new device requires restoring your encrypted key backup, or confirming an explicit key reset. Note: Key reset will replace your identity keys and older encrypted messages will no longer be decryptable."
+                    remoteUser = remoteUser,
+                    message = "This account already has identity keys. Restore an encrypted backup from your old device, or explicitly reset the keys. Resetting keys means older messages will no longer be decryptable."
                 )
             )
         }
@@ -200,14 +206,16 @@ class FortRepository(
 
     suspend fun exportEncryptedKeyBackup(userId: String, passphrase: String): Result<String> {
         return try {
+            require(passphrase.length >= 12) { "Use a backup passphrase with at least 12 characters." }
             val cards = database.personaCardDao().getCardsForUserOnce(userId)
-            if (cards.isEmpty()) {
-                return Result.failure(IllegalStateException("No persona cards found to backup."))
+            if (cards.none { it.type == CardType.PERSONAL }) {
+                return Result.failure(IllegalStateException("No personal identity key found to back up."))
             }
-            val jsonArray = org.json.JSONArray()
+
+            val cardArray = org.json.JSONArray()
             cards.forEach { card ->
-                val obj = org.json.JSONObject().apply {
-                    put("cardId", card.cardId)
+                val privateKeyBase64 = keyStoreMaster.decryptLocalData(card.privateKeyEncrypted)
+                cardArray.put(org.json.JSONObject().apply {
                     put("userId", card.userId)
                     put("type", card.type.name)
                     put("displayName", card.displayName)
@@ -215,14 +223,21 @@ class FortRepository(
                     put("bio", card.bio)
                     put("avatarEmoji", card.avatarEmoji)
                     put("publicKey", card.publicKey)
-                    put("privateKeyEncrypted", card.privateKeyEncrypted)
+                    // Plain key material exists only inside the passphrase-encrypted payload.
+                    put("privateKeyBase64", privateKeyBase64)
                     put("businessHoursOnly", card.businessHoursOnly)
                     put("moodSharingEnabled", card.moodSharingEnabled)
-                }
-                jsonArray.put(obj)
+                })
             }
-            val jsonBytes = jsonArray.toString().toByteArray(Charsets.UTF_8)
-            val encrypted = FortCryptoManager.encryptWithPassphrase(jsonBytes, passphrase.toCharArray())
+            val backup = org.json.JSONObject()
+                .put("version", 1)
+                .put("userId", userId)
+                .put("createdAt", System.currentTimeMillis())
+                .put("cards", cardArray)
+            val encrypted = FortCryptoManager.encryptWithPassphrase(
+                backup.toString().toByteArray(Charsets.UTF_8),
+                passphrase.toCharArray()
+            )
             Result.success(encrypted)
         } catch (e: Exception) {
             Result.failure(e)
@@ -235,28 +250,61 @@ class FortRepository(
         backupCiphertext: String
     ): Result<UserAccountEntity> {
         return try {
-            val decryptedBytes = FortCryptoManager.decryptWithPassphrase(backupCiphertext, passphrase.toCharArray())
-            val jsonStr = String(decryptedBytes, Charsets.UTF_8)
-            val jsonArray = org.json.JSONArray(jsonStr)
-            val cards = mutableListOf<PersonaCardEntity>()
-            for (i in 0 until jsonArray.length()) {
-                val obj = jsonArray.getJSONObject(i)
-                val card = PersonaCardEntity(
-                    cardId = obj.getString("cardId"),
-                    userId = obj.getString("userId"),
-                    type = CardType.valueOf(obj.getString("type")),
-                    displayName = obj.getString("displayName"),
-                    handle = obj.getString("handle"),
-                    bio = obj.getString("bio"),
-                    avatarEmoji = obj.getString("avatarEmoji"),
-                    publicKey = obj.getString("publicKey"),
-                    privateKeyEncrypted = obj.getString("privateKeyEncrypted"),
-                    businessHoursOnly = obj.optBoolean("businessHoursOnly", false),
-                    moodSharingEnabled = obj.optBoolean("moodSharingEnabled", true)
+            require(passphrase.length >= 12) { "Backup passphrase must contain at least 12 characters." }
+            val backup = org.json.JSONObject(
+                String(
+                    FortCryptoManager.decryptWithPassphrase(backupCiphertext, passphrase.toCharArray()),
+                    Charsets.UTF_8
                 )
-                cards.add(card)
+            )
+            require(backup.optInt("version", -1) == 1) { "Unsupported identity backup version." }
+            require(backup.optString("userId") == remoteUser.userId) { "This backup belongs to a different account." }
+
+            val cardArray = backup.getJSONArray("cards")
+            val restoredCards = mutableListOf<PersonaCardEntity>()
+            val restoredTypes = mutableSetOf<CardType>()
+            for (i in 0 until cardArray.length()) {
+                val obj = cardArray.getJSONObject(i)
+                require(obj.getString("userId") == remoteUser.userId) { "Backup contains a different account's keys." }
+                val type = CardType.valueOf(obj.getString("type"))
+                require(restoredTypes.add(type)) { "Backup contains duplicate identity cards." }
+                val publicKey = obj.getString("publicKey")
+                val privateKeyBase64 = obj.getString("privateKeyBase64")
+
+                val remotePublicKey = remoteBackend.fetchPublicKey(remoteUser.userId, type.name)
+                    .getOrElse { throw it }
+                require(remotePublicKey == publicKey) { "Backup keys do not match this account's registered identity." }
+                val challenge = UUID.randomUUID().toString().toByteArray(Charsets.UTF_8)
+                val signature = FortCryptoManager.sign(challenge, privateKeyBase64)
+                require(FortCryptoManager.verify(challenge, signature, publicKey)) {
+                    "Backup private and public keys do not match."
+                }
+
+                val idSuffix = when (type) {
+                    CardType.PERSONAL -> "personal"
+                    CardType.WORK -> "work"
+                    CardType.TRAVEL -> "travel"
+                    CardType.MARKETPLACE -> "market"
+                }
+                restoredCards.add(
+                    PersonaCardEntity(
+                        cardId = "card_${remoteUser.userId}_${idSuffix}",
+                        userId = remoteUser.userId,
+                        type = type,
+                        displayName = obj.getString("displayName"),
+                        handle = obj.getString("handle"),
+                        bio = obj.getString("bio"),
+                        avatarEmoji = obj.optString("avatarEmoji", "🛡️"),
+                        publicKey = publicKey,
+                        privateKeyEncrypted = keyStoreMaster.encryptLocalData(privateKeyBase64),
+                        businessHoursOnly = obj.optBoolean("businessHoursOnly", false),
+                        moodSharingEnabled = obj.optBoolean("moodSharingEnabled", true)
+                    )
+                )
             }
-            database.personaCardDao().insertCards(cards)
+            require(restoredTypes.contains(CardType.PERSONAL)) { "Backup is missing the personal identity key." }
+
+            database.personaCardDao().insertCards(restoredCards)
             restoreOrInitLocalAccount(remoteUser, remoteUser.displayName, forceKeyReset = false)
         } catch (e: Exception) {
             Result.failure(e)
@@ -1143,6 +1191,10 @@ class FortRepository(
 
     suspend fun createCall(call: RemoteCallRecord): Result<Unit> {
         return remoteBackend.createCall(call)
+    }
+
+    suspend fun fetchTurnServerConfigs(requesterUserId: String): Result<List<TurnServerConfig>> {
+        return remoteBackend.fetchTurnServerConfigs(requesterUserId)
     }
 
     suspend fun updateCallStatus(callId: String, status: String, requesterUserId: String): Result<Unit> {

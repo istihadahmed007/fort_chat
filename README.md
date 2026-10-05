@@ -49,6 +49,7 @@ The server relay (`FortRemoteBackend` / Cloud Firestore) functions strictly as a
 | **Real Accounts & Persistence** | SQLite Room Database (`FortDatabase`, v2 with `MIGRATION_1_2`) with entities for `UserAccount`, `PersonaCard`, `PeerConnection`, `ChatMessage`, `KnockFirstRequest`, `ContactPass`, and `MoodRing`. Persists across app restarts and process kills without synthetic mock profiles. |
 | **Authentication Choices** | Clean onboarding supporting Email/Password, 6-digit Phone OTP verification, Google Sign-In, and self-service Password Reset recovery. Branded with the 3D Fortress Shield icon. |
 | **Zero-Correlation Cards** | 4 distinct facets (Personal, Work, Travel, Marketplace) with isolated NIST P-256 ECDH public keys. Senders never discover whether the counterparty has other cards. |
+| **Portable Identity Backup** | Export a passphrase-encrypted identity backup from Identity & Access Map and restore the same keys after signing in on a new device. A new-device sign-in never silently rotates existing keys; key reset requires explicit confirmation and warns that older messages will no longer be decryptable. |
 | **Camera QR Scanner & Pass Engine** | Live CameraX viewfinder (`PassScannerModal`) analyzing real-time camera frames with ZXing (`com.google.zxing:core:3.5.3`). Features manual token entry fallback, graceful camera permission denial handling, invalid/expired/revoked token handling, and offline error states. Generates scannable QR bitmaps. |
 | **Preview Before Connect** | Scanned invitations trigger a `PassClaimPreviewDialog` showing the inviter's persona card, access duration, and expiration timestamp. Connection requires explicit user confirmation via "Accept & Connect" or "Cancel". |
 | **Reciprocal Two-Way Connection** | Upon pass claim, claimant saves the peer connection and immediately transmits an authenticated, end-to-end encrypted sovereign handshake packet. When the issuer syncs inbound messages, a reciprocal connection is automatically established in their local database, placing the new conversation in both users' Chats screen. |
@@ -146,16 +147,17 @@ FORT includes a factory (`FortBackendFactory`) that initializes real production 
 2. Enable **Cloud Firestore** and the Authentication providers you intend to use: **Email/Password**, **Phone**, and **Google**.
 3. Register your Android app with package name `com.fort.messenger`. Add the debug/release SHA fingerprints requested by Firebase for Phone and Google sign-in.
 4. Download the real `google-services.json` for this app and place it at `app/google-services.json`. The checked-in `app/google-services.json.example` is intentionally fake and cannot connect to Firebase. The Google Services Gradle plugin is applied only when the real file exists, so source-only CI builds still work.
-5. Deploy the rules in [`firestore.rules`](https://github.com/istihadahmed007/fort_chat/blob/main/firestore.rules) to the same Firebase project:
+5. Configure a production Coturn service and the server-only variables shown in [`functions/.env.example`](functions/.env.example). Keep the Functions `.env` file out of version control.
+6. Deploy the Firestore rules and callable functions:
    ```bash
-   firebase deploy --only firestore:rules
+   firebase deploy --only firestore:rules,functions
    ```
 
 The app now uses Firebase Authentication and Cloud Firestore for production accounts and messaging. Without a valid `google-services.json`, cloud authentication and messaging report that setup is missing; they do not create demo accounts or show fake success. CI can compile and run local tests without your Firebase project, but it cannot verify live sign-in or cloud access.
 
 ### 6.2 Security Rules Overview (`firestore.rules`)
 * **Private Accounts (`/users/{userId}`):** Strictly owner-only (`request.auth.uid == userId`). Prohibits broad authenticated reads of full account profiles to prevent exposing sensitive email addresses, raw phone numbers, and private session tokens.
-* **Minimal Public Profiles (`/public_profiles/{userId}`):** Minimal discovery projection containing only safe, non-sensitive fields (`displayName`, `normalizedDisplayName`, `fortId`, `phoneHash`, `hasVerifiedPhone`, `discoverableByName`, `discoverableByPhone`).
+* **Minimal Public Profiles (`/public_profiles/{userId}`):** Minimal discovery projection containing only safe display and discovery fields. Raw phone numbers and phone hashes are excluded; profile phone writes must match the signed Firebase Auth phone claim.
 * **Unique Fort ID Registry (`/fort_ids/{cleanFortId}`):** Uniqueness reservation enforcing one owner per Fort ID.
 * **Encrypted Message Packets (`/messages/{messageId}`):** Only designated recipient or sender can read ciphertext packets. Senders cannot transmit to recipients where they are blocked. Recipient delivery/read receipts, participant reaction maps, and sender edits/deletions are strictly governed.
 * **Anti-Scraping Contact Passes (`/contact_passes/{passId}`):** Readable exclusively by the pass issuer and the verified claimant. Prohibits global collection reads or token scraping.
@@ -166,13 +168,14 @@ The app now uses Firebase Authentication and Cloud Firestore for production acco
 * **Blocklists (`/users/{userId}/blocklist/{blockedUserId}`):** Users can manage their blocklist; authenticated peers can query their own block status.
 
 ### 6.3 Real-Time Calling & TURN Configuration
-FORT uses WebRTC Unified Plan for end-to-end media streaming with standard STUN fallbacks (`stun.l.google.com:19302`). In enterprise or symmetric NAT networks, a TURN relay is required.
-To configure a production TURN server without embedding static credentials into the APK binary:
-1. Provide system environment variables or Java system properties at startup or container launch:
-   - `FORT_TURN_HOST`: Hostname and port of your TURN server (e.g., `turn.yourdomain.com:3478` or `coturn.yourdomain.com:5349`).
-   - `FORT_TURN_USER`: Ephemeral username or auth secret.
-   - `FORT_TURN_PASS`: Ephemeral credential or password.
-2. The `WebRtcCallManager` automatically loads these credentials dynamically and appends them to the ICE server list during call negotiation.
+FORT uses WebRTC Unified Plan with public STUN fallbacks. Networks that block direct peer connections need a TURN relay.
+
+Configure Coturn REST authentication and the same shared secret on the TURN server and Firebase Functions. Copy `functions/.env.example` to an untracked `functions/.env` and set:
+- `FORT_TURN_HOSTS`: comma-separated `turn:` or `turns:` URLs, including ports.
+- `FORT_TURN_SHARED_SECRET`: the Coturn REST `static-auth-secret`. This secret stays on the server and is never included in the Android app.
+- `FORT_TURN_TTL_SECONDS`: credential lifetime (300–86400 seconds; defaults to 3600).
+
+The authenticated `getTurnCredentials` callable generates per-user, expiring HMAC credentials. The Android app requests them when a call starts and adds them to its ICE servers. If TURN is not configured, calls use STUN only and may fail on restrictive networks. Deploy callable changes with `firebase deploy --only functions`; never commit a real `.env` file.
 
 ### 6.4 Firebase Emulator Rules Test Suite
 The security rules and permission boundaries are verified against the real Firebase Firestore Emulator:

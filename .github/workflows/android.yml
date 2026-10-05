@@ -36,10 +36,25 @@ jobs:
         cd functions
         npm ci
 
+    - name: Set up JDK 21 for Firebase Emulators
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+
     - name: Run Firebase Emulator Suite & Security Rules Tests
       env:
         FUNCTIONS_DISCOVERY_TIMEOUT: 60000
+        FORT_TURN_HOSTS: turn:turn.example.invalid:3478,turns:turn.example.invalid:5349
+        FORT_TURN_SHARED_SECRET: test-only-turn-secret
+        FORT_TURN_TTL_SECONDS: 3600
       run: npx --yes firebase-tools emulators:exec --project demo-fort-chat --only firestore,functions,auth "node test_emulator_rules.js"
+
+    - name: Restore JDK 17 for Android build
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew

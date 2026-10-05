@@ -14,6 +14,7 @@ import com.fort.messenger.data.local.KnockFirstRequestEntity
 import com.fort.messenger.security.ContactPassPayload
 import com.fort.messenger.security.ContactPassQrEngine
 import com.fort.messenger.security.FortCryptoManager
+import com.fort.messenger.security.KeyStoreMaster
 import com.fort.messenger.security.IdentityKeyPair
 import com.fort.messenger.security.ShareCheckScrubber
 import kotlinx.coroutines.flow.first
@@ -1585,7 +1586,9 @@ class FortRealProductionTest {
         assertEquals(4, restoredCards.size)
         val restoredPersonal = restoredCards.find { it.type == CardType.PERSONAL }!!
         assertEquals("Restored public key matches original", origPersonalCard.publicKey, restoredPersonal.publicKey)
-        assertEquals("Restored encrypted private key matches original", origPersonalCard.privateKeyEncrypted, restoredPersonal.privateKeyEncrypted)
+        val originalPrivateKey = KeyStoreMaster().decryptLocalData(origPersonalCard.privateKeyEncrypted)
+        val restoredPrivateKey = KeyStoreMaster().decryptLocalData(restoredPersonal.privateKeyEncrypted)
+        assertEquals("Restored private key is re-encrypted for this device with the same key material", originalPrivateKey, restoredPrivateKey)
 
         databaseDevice2.close()
     }

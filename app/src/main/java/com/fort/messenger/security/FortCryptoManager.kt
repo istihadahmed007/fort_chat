@@ -45,6 +45,8 @@ object FortCryptoManager {
     private const val GCM_IV_SIZE_BYTES = 12
     private const val GCM_TAG_SIZE_BITS = 128
     private const val HKDF_INFO = "Fort-Sovereign-E2EE-v1"
+    private const val BACKUP_FORMAT_MAGIC = 0x46524B59 // "FRKY"
+    private const val BACKUP_PBKDF2_ITERATIONS = 600_000
 
     private val secureRandom = SecureRandom()
 
@@ -293,9 +295,14 @@ object FortCryptoManager {
     }
 
     fun encryptWithPassphrase(data: ByteArray, passphrase: CharArray, salt: ByteArray = ByteArray(16).apply { secureRandom.nextBytes(this) }): String {
-        val keySpec = javax.crypto.spec.PBEKeySpec(passphrase, salt, 10000, 256)
+        require(salt.size == 16) { "Backup salt must be 16 bytes." }
+        val keySpec = javax.crypto.spec.PBEKeySpec(passphrase, salt, BACKUP_PBKDF2_ITERATIONS, 256)
         val factory = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-        val derivedKey = factory.generateSecret(keySpec).encoded
+        val derivedKey = try {
+            factory.generateSecret(keySpec).encoded
+        } finally {
+            keySpec.clearPassword()
+        }
         val secretKey = SecretKeySpec(derivedKey, "AES")
 
         val iv = ByteArray(GCM_IV_SIZE_BYTES).apply { secureRandom.nextBytes(this) }
@@ -304,7 +311,9 @@ object FortCryptoManager {
         cipher.init(Cipher.ENCRYPT_MODE, secretKey, gcmSpec)
         val ciphertext = cipher.doFinal(data)
 
-        val combined = ByteBuffer.allocate(salt.size + iv.size + ciphertext.size)
+        val combined = ByteBuffer.allocate(8 + salt.size + iv.size + ciphertext.size)
+            .putInt(BACKUP_FORMAT_MAGIC)
+            .putInt(BACKUP_PBKDF2_ITERATIONS)
             .put(salt)
             .put(iv)
             .put(ciphertext)
@@ -314,17 +323,28 @@ object FortCryptoManager {
 
     fun decryptWithPassphrase(payloadBase64: String, passphrase: CharArray): ByteArray {
         val combined = Base64.decode(payloadBase64, Base64.NO_WRAP)
-        if (combined.size < 16 + GCM_IV_SIZE_BYTES + 16) {
-            throw IllegalArgumentException("Corrupt backup payload.")
+        if (combined.size < 8 + 16 + GCM_IV_SIZE_BYTES + 16) {
+            throw IllegalArgumentException("Corrupt or unsupported backup payload.")
         }
         val buffer = ByteBuffer.wrap(combined)
+        if (buffer.int != BACKUP_FORMAT_MAGIC) {
+            throw IllegalArgumentException("Unsupported identity backup format. Create a new backup from the original device.")
+        }
+        val iterations = buffer.int
+        if (iterations !in 100_000..2_000_000) {
+            throw IllegalArgumentException("Unsupported identity backup key-derivation settings.")
+        }
         val salt = ByteArray(16).also { buffer.get(it) }
         val iv = ByteArray(GCM_IV_SIZE_BYTES).also { buffer.get(it) }
         val ciphertext = ByteArray(buffer.remaining()).also { buffer.get(it) }
 
-        val keySpec = javax.crypto.spec.PBEKeySpec(passphrase, salt, 10000, 256)
+        val keySpec = javax.crypto.spec.PBEKeySpec(passphrase, salt, iterations, 256)
         val factory = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-        val derivedKey = factory.generateSecret(keySpec).encoded
+        val derivedKey = try {
+            factory.generateSecret(keySpec).encoded
+        } finally {
+            keySpec.clearPassword()
+        }
         val secretKey = SecretKeySpec(derivedKey, "AES")
 
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")

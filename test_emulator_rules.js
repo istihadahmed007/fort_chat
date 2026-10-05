@@ -4,6 +4,13 @@ const FIRESTORE_PORT = process.env.FIRESTORE_EMULATOR_PORT || 8080;
 const FUNCTIONS_PORT = process.env.FUNCTIONS_EMULATOR_PORT || 5001;
 const PROJECT_ID = process.env.GCLOUD_PROJECT || process.env.PROJECT_ID || "demo-fort-chat";
 
+process.env.FIRESTORE_EMULATOR_HOST = process.env.FIRESTORE_EMULATOR_HOST || `127.0.0.1:${FIRESTORE_PORT}`;
+process.env.FIREBASE_AUTH_EMULATOR_HOST = process.env.FIREBASE_AUTH_EMULATOR_HOST || "127.0.0.1:9099";
+const admin = require("./functions/node_modules/firebase-admin");
+admin.initializeApp({ projectId: PROJECT_ID });
+const adminAuth = admin.auth();
+const adminDb = admin.firestore();
+
 const BASE_URL = `http://127.0.0.1:${FIRESTORE_PORT}/v1/projects/${PROJECT_ID}/databases/(default)/documents`;
 const FUNCTIONS_URL = `http://127.0.0.1:${FUNCTIONS_PORT}/${PROJECT_ID}/us-central1`;
 
@@ -107,6 +114,13 @@ async function runTests() {
     const DAVE_BLOCKED_UID = "dave_blocked_4";
     const EVE_UID = "eve_attacker_5";
 
+    await Promise.all([
+        adminAuth.createUser({ uid: ALICE_UID, phoneNumber: "+15551234567" }),
+        adminAuth.createUser({ uid: BOB_UID, phoneNumber: "+15559876543" }),
+        adminAuth.createUser({ uid: CHARLIE_UID, phoneNumber: "+15550001111" }),
+        adminAuth.createUser({ uid: EVE_UID })
+    ]);
+
     // -----------------------------------------------------------------
     // TEST 1: Private User Profiles vs Minimal Public Profiles & phoneHash Elimination
     // -----------------------------------------------------------------
@@ -120,8 +134,17 @@ async function runTests() {
         displayName: "Alice Sovereign",
         authToken: "tok_private_123"
     });
-    const createPrivateRes = await requestFirestore(`users/${ALICE_UID}`, 'PATCH', alicePrivateProfile, ALICE_UID);
-    assert(createPrivateRes.status === 200, "Alice can create her own private /users document");
+    const createPrivateRes = await requestFirestore(
+        `users/${ALICE_UID}`, 'PATCH', alicePrivateProfile, ALICE_UID,
+        { phone_number: "+15551234567" }
+    );
+    assert(createPrivateRes.status === 200, "Alice can create her own verified private /users document");
+
+    const evePhoneSpoofRes = await requestFirestore(`users/${EVE_UID}`, 'PATCH', toFirestoreFields({
+        userId: EVE_UID,
+        phoneNumber: "+15559876543"
+    }), EVE_UID);
+    assert(evePhoneSpoofRes.status === 403, "A user cannot write an unverified phone number to their profile");
 
     // Alice creates her persona card with public key
     const aliceCard = toFirestoreFields({
@@ -146,6 +169,18 @@ async function runTests() {
     });
     const createPublicRes = await requestFirestore(`public_profiles/${ALICE_UID}`, 'PATCH', alicePublicProfile, ALICE_UID);
     assert(createPublicRes.status === 200, "Alice can create her minimal public profile");
+
+    const alicePhoneSpoofUpdateRes = await requestFirestore(
+        `users/${ALICE_UID}`, 'PATCH', toFirestoreFields({ phoneNumber: "+15559876543" }), ALICE_UID,
+        { phone_number: "+15551234567" }
+    );
+    assert(alicePhoneSpoofUpdateRes.status === 403, "A user cannot change their profile phone to another number");
+
+    const aliceUnrelatedProfileUpdateRes = await requestFirestore(
+        `users/${ALICE_UID}`, 'PATCH', toFirestoreFields({ displayName: "Alice Updated" }), ALICE_UID,
+        { phone_number: "+15551234567" }
+    );
+    assert(aliceUnrelatedProfileUpdateRes.status === 200, "Unrelated profile updates still work with the verified phone unchanged");
 
     // Attempting to publish unsalted phoneHash in public profile MUST BE REJECTED
     const publicProfileWithPhoneHash = toFirestoreFields({
@@ -427,7 +462,7 @@ async function runTests() {
         displayName: "Bob Guardian",
         fortId: "@bob.fort",
         discoverableByPhone: true
-    }), BOB_UID);
+    }), BOB_UID, { phone_number: "+15559876543" });
 
     // Setup Charlie with unlisted phone (discoverableByPhone = false)
     await requestFirestore(`users/${CHARLIE_UID}`, 'PATCH', toFirestoreFields({
@@ -436,9 +471,17 @@ async function runTests() {
         displayName: "Charlie Hidden",
         fortId: "@charlie.fort",
         discoverableByPhone: false
-    }), CHARLIE_UID);
+    }), CHARLIE_UID, { phone_number: "+15550001111" });
 
-    // 5.1 Requester without phone verification is rejected
+    // Seed a legacy/corrupt profile to verify the callable does not treat this client data as proof.
+    await adminDb.collection("users").doc(EVE_UID).set({
+        userId: EVE_UID,
+        phoneNumber: "+15559876543",
+        displayName: "Eve Spoof",
+        discoverableByPhone: true
+    });
+
+    // 5.1 A profile phone number without a signed phone claim is not verification.
     const unverifiedLookupRes = await callFunction("lookupUserByPhone", { phoneNumber: "+15559876543" }, EVE_UID);
     assert(
         unverifiedLookupRes.status === 403 || (unverifiedLookupRes.data && unverifiedLookupRes.data.error && unverifiedLookupRes.data.error.status === 'PERMISSION_DENIED'),
@@ -446,7 +489,10 @@ async function runTests() {
     );
 
     // 5.2 Verified requester (Alice has phoneNumber in users/alice_user_1) searches Bob
-    const aliceLookupBobRes = await callFunction("lookupUserByPhone", { phoneNumber: "+1 (555) 987-6543" }, ALICE_UID);
+    const aliceLookupBobRes = await callFunction(
+        "lookupUserByPhone", { phoneNumber: "+1 (555) 987-6543" }, ALICE_UID,
+        { phone_number: "+15551234567" }
+    );
     const bobFound = aliceLookupBobRes.data && aliceLookupBobRes.data.result && aliceLookupBobRes.data.result.user;
     assert(
         aliceLookupBobRes.status === 200 && bobFound != null && bobFound.userId === BOB_UID && bobFound.displayName === "Bob Guardian",
@@ -458,7 +504,10 @@ async function runTests() {
     );
 
     // 5.3 Target with discoverableByPhone = false returns null
-    const aliceLookupCharlieRes = await callFunction("lookupUserByPhone", { phoneNumber: "+15550001111" }, ALICE_UID);
+    const aliceLookupCharlieRes = await callFunction(
+        "lookupUserByPhone", { phoneNumber: "+15550001111" }, ALICE_UID,
+        { phone_number: "+15551234567" }
+    );
     const charlieFound = aliceLookupCharlieRes.data && aliceLookupCharlieRes.data.result && aliceLookupCharlieRes.data.result.user;
     assert(
         aliceLookupCharlieRes.status === 200 && charlieFound === null,
@@ -472,7 +521,10 @@ async function runTests() {
         createdAt: Date.now()
     }), BOB_UID);
 
-    const aliceLookupBlockedBobRes = await callFunction("lookupUserByPhone", { phoneNumber: "+15559876543" }, ALICE_UID);
+    const aliceLookupBlockedBobRes = await callFunction(
+        "lookupUserByPhone", { phoneNumber: "+15559876543" }, ALICE_UID,
+        { phone_number: "+15551234567" }
+    );
     const blockedBobFound = aliceLookupBlockedBobRes.data && aliceLookupBlockedBobRes.data.result && aliceLookupBlockedBobRes.data.result.user;
     assert(
         aliceLookupBlockedBobRes.status === 200 && blockedBobFound === null,
@@ -482,16 +534,59 @@ async function runTests() {
     // Unblock Alice so subsequent legitimate calls and messages can proceed
     await requestFirestore(`users/${BOB_UID}/blocklist/${ALICE_UID}`, 'DELETE', null, BOB_UID);
 
+    // Legacy client-writable phone data must never shadow Firebase Auth's verified phone index.
+    const aliceLookupEveSpoofRes = await callFunction(
+        "lookupUserByPhone", { phoneNumber: "+15559876543" }, ALICE_UID,
+        { phone_number: "+15551234567" }
+    );
+    const eveSpoofFound = aliceLookupEveSpoofRes.data && aliceLookupEveSpoofRes.data.result && aliceLookupEveSpoofRes.data.result.user;
+    assert(
+        aliceLookupEveSpoofRes.status === 200 && eveSpoofFound != null && eveSpoofFound.userId === BOB_UID,
+        "Phone lookup resolves the Firebase Auth owner, not a forged profile phone number"
+    );
+
     // 5.5 Rate limiting test: excessive lookups trigger RESOURCE_EXHAUSTED
     let rateLimited = false;
     for (let i = 0; i < 12; i++) {
-        const res = await callFunction("lookupUserByPhone", { phoneNumber: `+1555999000${i}` }, ALICE_UID);
+        const res = await callFunction(
+            "lookupUserByPhone", { phoneNumber: `+1555999000${i}` }, ALICE_UID,
+            { phone_number: "+15551234567" }
+        );
         if (res.status === 429 || (res.data && res.data.error && res.data.error.status === 'RESOURCE_EXHAUSTED')) {
             rateLimited = true;
             break;
         }
     }
     assert(rateLimited, "Phone discovery enforces strict server-side rate limiting against enumeration");
+
+    // TURN credentials require authentication and use a short-lived Coturn REST HMAC credential.
+    const unauthTurnRes = await callFunction("getTurnCredentials", {}, null);
+    assert(
+        unauthTurnRes.status === 401 || (unauthTurnRes.data && unauthTurnRes.data.error && unauthTurnRes.data.error.status === "UNAUTHENTICATED"),
+        "Unauthenticated clients cannot obtain TURN credentials"
+    );
+    const turnRes = await callFunction("getTurnCredentials", {}, ALICE_UID);
+    const turnServers = turnRes.data && turnRes.data.result && turnRes.data.result.servers;
+    const configuredTurnHosts = (process.env.FORT_TURN_HOSTS || "").split(",").map((x) => x.trim()).filter(Boolean);
+    if (configuredTurnHosts.length > 0 && process.env.FORT_TURN_SHARED_SECRET) {
+        const server = turnServers && turnServers[0];
+        const expectedCredential = server
+            ? crypto.createHmac("sha1", process.env.FORT_TURN_SHARED_SECRET).update(server.username).digest("base64")
+            : "";
+        assert(
+            turnRes.status === 200 && server != null
+                && JSON.stringify(server.urls) === JSON.stringify(configuredTurnHosts)
+                && server.username.endsWith(`:${ALICE_UID}`)
+                && server.credential === expectedCredential
+                && server.expiresAt > Math.floor(Date.now() / 1000),
+            "Authenticated client receives valid short-lived TURN REST credentials"
+        );
+    } else {
+        assert(
+            turnRes.status === 200 && Array.isArray(turnServers) && turnServers.length === 0,
+            "TURN credentials stay disabled until server-side TURN configuration is provided"
+        );
+    }
 
 
     // -----------------------------------------------------------------
