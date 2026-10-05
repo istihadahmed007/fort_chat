@@ -72,37 +72,44 @@ jobs:
         path: app/build/outputs/apk/debug/app-debug.apk
         if-no-files-found: error
 
+    - name: Determine Release Details
+      id: release_info
+      run: |
+        if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "title=Fort Chat $TAG_NAME — Sovereign Sanctuary Release" >> $GITHUB_OUTPUT
+          echo "prerelease=false" >> $GITHUB_OUTPUT
+        else
+          echo "tag=latest" >> $GITHUB_OUTPUT
+          echo "title=Fort Chat Latest Build" >> $GITHUB_OUTPUT
+          echo "prerelease=true" >> $GITHUB_OUTPUT
+        fi
+
     - name: Create or Update GitHub Release
       uses: softprops/action-gh-release@v2
-      if: startsWith(github.ref, 'refs/tags/')
       with:
+        tag_name: ${{ steps.release_info.outputs.tag }}
+        name: ${{ steps.release_info.outputs.title }}
         files: app/build/outputs/apk/debug/app-debug.apk
+        prerelease: ${{ steps.release_info.outputs.prerelease == 'true' }}
         generate_release_notes: true
         fail_on_unmatched_files: false
         body: |
-          ## Fort Messenger v1.0.0 — Sovereign Sanctuary Production Release
+          ## Fort Chat — Sovereign Sanctuary Release (${{ steps.release_info.outputs.tag }})
 
-          ### Security & Cryptography:
+          ### Direct APK Download:
+          - **[Download app-debug.apk](https://github.com/${{ github.repository }}/releases/download/${{ steps.release_info.outputs.tag }}/app-debug.apk)**
+
+          ### Key Features & Security:
+          - **Ice-Blue Liquid-Glass UI:** Modern frosted glass surfaces, deep-navy text, and royal-blue action buttons across Chats, Knock First Requests, and Conversation screens.
           - **Sender-Authenticated E2EE:** NIST P-256 ECDH key agreement with NIST P-256 ECDSA digital signatures (`SHA256withECDSA`).
           - **Fail-Closed Hardware Protection:** AES-256-GCM master key protected by Android KeyStore.
           - **Encrypted Local Storage:** Room database protects messages with AES-256-GCM cipher payloads (`encryptedLocalPayload`).
-          - **Atomic Single-Use Passes:** Concurrency-safe contact passes and server-side authorization in `firestore.rules`.
-          - **PBKDF2 Password Hashing:** PBKDF2WithHmacSHA256 credential hashing replacing legacy hash functions.
-
-          ### Modern Messenger Features:
-          - In-conversation text search.
-          - Quoted replies with preview banner.
-          - Real-time emoji message reactions with toggle support.
-          - Message editing with `(edited)` visual badge.
-          - Message deletion with privacy tombstone.
-          - Delivery and read receipts (`PENDING`, `SENT`, `DELIVERED`, `READ`).
-          - Multi-type attachment picker.
-          - Real offline outbox queueing and manual/automatic retry.
-          - Circles & rooms administration (invite dialog with roles, member kick, leave room).
-          - Online presence and typing indicator privacy toggles.
-          - Real authentication: Email/Password, 6-digit Phone OTP, Google Sign-In, Password Reset.
-
-          ### Download APK:
-          Download `app-debug.apk` below to install directly on Android devices.
+          - **Knock First Protocol:** Verified inviter & request inspection, consent triage (Accept, Decline, Block), with pending requests quarantined until explicit recipient action.
+          - **Quiet Presence:** Granular audience control with clear expiry timers.
+          - **WebRTC Calling:** Authenticated 1-to-1 audio and video calling limited to accepted contacts.
+          - **Trusted Pass Claim Functions:** Firebase Cloud Functions backend with atomic single-use Firestore transactions.
+          - **Multi-factor Onboarding:** Email/Password, 6-digit Phone OTP, Google Sign-In, Password Reset.
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

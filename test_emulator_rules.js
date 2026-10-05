@@ -6,7 +6,16 @@ const PROJECT_ID = process.env.GCLOUD_PROJECT || process.env.PROJECT_ID || "demo
 
 process.env.FIRESTORE_EMULATOR_HOST = process.env.FIRESTORE_EMULATOR_HOST || `127.0.0.1:${FIRESTORE_PORT}`;
 process.env.FIREBASE_AUTH_EMULATOR_HOST = process.env.FIREBASE_AUTH_EMULATOR_HOST || "127.0.0.1:9099";
-const admin = require("./functions/node_modules/firebase-admin");
+let admin;
+try {
+    admin = require("firebase-admin");
+} catch (e1) {
+    try {
+        admin = require("./functions/node_modules/firebase-admin");
+    } catch (e2) {
+        admin = require("../functions/node_modules/firebase-admin");
+    }
+}
 admin.initializeApp({ projectId: PROJECT_ID });
 const adminAuth = admin.auth();
 const adminDb = admin.firestore();

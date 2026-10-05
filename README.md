@@ -3,9 +3,17 @@
 > *"Your identity. Your circle. Your rules."*
 
 **Platform:** Native Android (Kotlin / Jetpack Compose)  
-**Design System:** `Sovereign Sanctuary` (Light / Dark High-Contrast Theme, Deep Slate `#0A0F1D`, Royal Blue `#2563EB`, Ice Blue `#E0E7FF`, Emerald `#10B981`, Rose `#EF4444`)  
+**Design System:** `Fort Chat Ice-Blue Liquid-Glass` (Light / Dark Theme, Ice Blue `#F0F7FF`, Deep Navy `#0D1B2A`, Royal Blue `#2563EB`)  
 **Architecture:** MVI / Clean Architecture with Coroutines StateFlow & SQLite Room Database  
 **Cryptography:** NIST P-256 ECDH Key Agreement, NIST P-256 ECDSA Digital Signatures (`SHA256withECDSA`), HKDF-SHA256, AES-256-GCM Authenticated Encryption, Android KeyStore Hardware Master Key, PBKDF2 Password Hashing
+
+---
+
+## 📥 Download Fort Chat APK
+Install the latest production build directly on any Android device (Android 8.0+):
+
+* **[Download Latest APK (app-debug.apk)](https://github.com/istihadahmed007/fort_chat/releases/latest/download/app-debug.apk)**
+* **[GitHub Releases Page (All Versions & Release Notes)](https://github.com/istihadahmed007/fort_chat/releases)**
 
 ---
 
