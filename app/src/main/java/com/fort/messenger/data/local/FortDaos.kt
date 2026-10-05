@@ -35,6 +35,9 @@ interface PersonaCardDao {
     @Query("SELECT * FROM persona_cards WHERE userId = :userId")
     fun getCardsForUser(userId: String): Flow<List<PersonaCardEntity>>
 
+    @Query("SELECT * FROM persona_cards WHERE userId = :userId")
+    suspend fun getCardsForUserOnce(userId: String): List<PersonaCardEntity>
+
     @Query("SELECT * FROM persona_cards WHERE cardId = :cardId LIMIT 1")
     suspend fun getCardById(cardId: String): PersonaCardEntity?
 

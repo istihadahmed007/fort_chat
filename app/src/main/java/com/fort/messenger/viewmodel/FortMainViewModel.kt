@@ -121,6 +121,10 @@ class FortMainViewModel @JvmOverloads constructor(
     private var activeCallJob: kotlinx.coroutines.Job? = null
     private var iceCandidatesJob: kotlinx.coroutines.Job? = null
     private var typingListenerJob: kotlinx.coroutines.Job? = null
+    private var realtimePacketsJob: kotlinx.coroutines.Job? = null
+    private var realtimeInboundKnockJob: kotlinx.coroutines.Job? = null
+    private var realtimeOutboundKnockJob: kotlinx.coroutines.Job? = null
+    private var searchJob: kotlinx.coroutines.Job? = null
 
     init {
         initializeAccountAndData()
@@ -446,12 +450,40 @@ class FortMainViewModel @JvmOverloads constructor(
             }
         }
 
-        // 7. Auto drain pending outbox messages
+        // 7. Auto drain pending outbox messages and sync pending inbound requests & messages
         viewModelScope.launch {
+            repository.syncInboundKnockFirstRequests(userId)
+            repository.syncInboundMessages(userId)
             repository.retryPendingOutbox()
         }
 
-        // 8. Observe incoming WebRTC calls
+        // 8. Real-time Inbound Encrypted Messages
+        realtimePacketsJob?.cancel()
+        realtimePacketsJob = viewModelScope.launch {
+            repository.listenToInboundPackets(userId).collect { packets ->
+                repository.processInboundPackets(packets, userId)
+            }
+        }
+
+        // 9. Real-time Inbound Knock First Requests
+        realtimeInboundKnockJob?.cancel()
+        realtimeInboundKnockJob = viewModelScope.launch {
+            repository.listenToInboundKnockFirstRequests(userId).collect { reqs ->
+                repository.syncInboundKnockFirstRequests(userId)
+            }
+        }
+
+        // 10. Real-time Outbound Knock First Request Status Changes (creates connection for sender upon acceptance)
+        realtimeOutboundKnockJob?.cancel()
+        realtimeOutboundKnockJob = viewModelScope.launch {
+            repository.listenToOutboundKnockFirstRequests(userId).collect { reqs ->
+                for (req in reqs) {
+                    repository.handleOutboundKnockStatusChange(req, userId)
+                }
+            }
+        }
+
+        // 11. Observe incoming WebRTC calls
         viewModelScope.launch {
             repository.listenToIncomingCalls(userId).collect { call ->
                 if (call != null && call.status == "RINGING" && _uiState.value.activeCallSession == null) {
@@ -641,6 +673,14 @@ class FortMainViewModel @JvmOverloads constructor(
     fun logout() {
         teardownWebRtc()
         LiveLocationService.stop(getApplication())
+        realtimePacketsJob?.cancel()
+        realtimePacketsJob = null
+        realtimeInboundKnockJob?.cancel()
+        realtimeInboundKnockJob = null
+        realtimeOutboundKnockJob?.cancel()
+        realtimeOutboundKnockJob = null
+        searchJob?.cancel()
+        searchJob = null
         viewModelScope.launch {
             repository.logout()
             _uiState.update {
@@ -656,6 +696,15 @@ class FortMainViewModel @JvmOverloads constructor(
                     toastMessage = "Signed out of Sovereign Enclave"
                 )
             }
+        }
+    }
+
+    fun onAppResume() {
+        val user = _uiState.value.currentUserAccount ?: return
+        viewModelScope.launch {
+            repository.syncInboundKnockFirstRequests(user.userId)
+            repository.syncInboundMessages(user.userId)
+            repository.retryPendingOutbox()
         }
     }
 
@@ -873,9 +922,16 @@ class FortMainViewModel @JvmOverloads constructor(
 
     fun searchPeople(query: String, mode: SearchMode) {
         val user = _uiState.value.currentUserAccount ?: return
+        searchJob?.cancel()
+        val trimmed = query.trim()
+        if (trimmed.isBlank()) {
+            _uiState.update { it.copy(isSearchingPeople = false, searchResults = emptyList(), searchPeopleError = null) }
+            return
+        }
         _uiState.update { it.copy(isSearchingPeople = true, searchPeopleError = null) }
-        viewModelScope.launch {
-            val result = repository.searchUsers(query, mode, user.userId)
+        searchJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(250L)
+            val result = repository.searchUsers(trimmed, mode, user.userId)
             _uiState.update {
                 it.copy(
                     isSearchingPeople = false,
@@ -1013,6 +1069,11 @@ class FortMainViewModel @JvmOverloads constructor(
         webrtcManager?.switchCamera()
     }
 
+    fun onCallPermissionsGranted() {
+        val session = _uiState.value.activeCallSession ?: return
+        webrtcManager?.startLocalMedia(session.callType)
+    }
+
     private fun initWebRtcForCall(session: CallSession, isInitiator: Boolean) {
         val user = _uiState.value.currentUserAccount ?: return
         teardownWebRtc()
@@ -1035,7 +1096,17 @@ class FortMainViewModel @JvmOverloads constructor(
         )
         webrtcManager = manager
         manager.init()
-        manager.startLocalMedia(session.callType)
+
+        // Only start local media if permission is already granted; otherwise deferred until onCallPermissionsGranted()
+        val hasAudio = androidx.core.content.ContextCompat.checkSelfPermission(
+            getApplication(), android.Manifest.permission.RECORD_AUDIO
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        val hasVideo = session.callType != CallType.VIDEO || androidx.core.content.ContextCompat.checkSelfPermission(
+            getApplication(), android.Manifest.permission.CAMERA
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (hasAudio && hasVideo) {
+            manager.startLocalMedia(session.callType)
+        }
         manager.createPeerConnection()
 
         activeCallJob = viewModelScope.launch {
@@ -1056,10 +1127,14 @@ class FortMainViewModel @JvmOverloads constructor(
             }
         }
 
+        val processedCandidateKeys = mutableSetOf<String>()
         iceCandidatesJob = viewModelScope.launch {
             repository.listenToCallCandidates(session.callId, !isInitiator).collect { candidateList ->
                 candidateList.forEach { candidate ->
-                    manager.addRemoteIceCandidate(candidate)
+                    val key = "${candidate.sdpMid}_${candidate.sdpMLineIndex}_${candidate.candidate}"
+                    if (processedCandidateKeys.add(key)) {
+                        manager.addRemoteIceCandidate(candidate)
+                    }
                 }
             }
         }

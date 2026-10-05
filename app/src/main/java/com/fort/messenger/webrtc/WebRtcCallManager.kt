@@ -131,6 +131,12 @@ class WebRtcCallManager(
                 }
             }
         }
+
+        // If peerConnection is already initialized, attach the newly created tracks
+        peerConnection?.let { pc ->
+            localAudioTrack?.let { pc.addTrack(it, listOf("ARDAMS")) }
+            localVideoTrackInternal?.let { pc.addTrack(it, listOf("ARDAMS")) }
+        }
     }
 
     fun createPeerConnection(

@@ -25,6 +25,7 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import com.fort.messenger.data.local.KnockFirstRequestEntity
 import com.fort.messenger.model.*
+import com.fort.messenger.security.FortCryptoManager
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
@@ -83,8 +84,20 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
             ?: user.displayName?.takeIf { it.isNotBlank() }
             ?: previous.getString("displayName")?.takeIf { it.isNotBlank() }
             ?: email.substringBefore("@").ifBlank { "Fort member" }
-        val fortId = previous.getString("fortId")
-            ?: "@${displayName.lowercase().replace(" ", "").replace("@", "")}.fort"
+        val baseFortId = displayName.lowercase().replace(" ", "").replace("@", "")
+        var fortId = previous.getString("fortId")
+        if (fortId.isNullOrBlank()) {
+            val candidate = "@$baseFortId.fort"
+            val existingReservation = firestore.collection("fort_ids").document(candidate).get().await()
+            fortId = if (existingReservation.exists() && existingReservation.getString("userId") != user.uid) {
+                "@${baseFortId}_${user.uid.take(4).lowercase()}.fort"
+            } else {
+                candidate
+            }
+            firestore.collection("fort_ids").document(fortId).set(
+                mapOf("userId" to user.uid, "fortId" to fortId, "reservedAt" to System.currentTimeMillis())
+            ).await()
+        }
         val discoverableByName = previous.getBoolean("discoverableByName") ?: true
         val discoverableByPhone = previous.getBoolean("discoverableByPhone") ?: true
         val profile = mutableMapOf<String, Any?>(
@@ -99,6 +112,23 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
         )
         if (!previous.exists()) profile["createdAt"] = System.currentTimeMillis()
         profileRef.set(profile, SetOptions.merge()).await()
+
+        // Also publish minimal public discovery profile (zero private email or raw phone numbers exposed)
+        val phoneHash = user.phoneNumber?.let { FortCryptoManager.sha256Hex(PhoneDiscoveryHelper.normalizeToE164(it) ?: it) } ?: ""
+        val publicProfile = mutableMapOf<String, Any?>(
+            "userId" to user.uid,
+            "displayName" to displayName,
+            "normalizedDisplayName" to displayName.trim().lowercase(),
+            "fortId" to fortId,
+            "avatarEmoji" to "🛡️",
+            "hasVerifiedPhone" to (user.phoneNumber != null),
+            "phoneHash" to phoneHash,
+            "discoverableByName" to discoverableByName,
+            "discoverableByPhone" to discoverableByPhone,
+            "updatedAt" to System.currentTimeMillis()
+        )
+        firestore.collection("public_profiles").document(user.uid).set(publicProfile, SetOptions.merge()).await()
+
         return RemoteUserAccount(
             userId = user.uid,
             email = email,
@@ -232,11 +262,20 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
                 mapOf("userId" to userId, "cardType" to cardType, "publicKey" to publicKey),
                 SetOptions.merge()
             ).await()
+        // Also update public_profiles with the public key for zero-leakage key discovery
+        firestore.collection("public_profiles").document(userId).set(
+            mapOf("${cardType.lowercase()}PublicKey" to publicKey),
+            SetOptions.merge()
+        ).await()
         Unit
     }
 
     override suspend fun fetchPublicKey(userId: String, cardType: String): Result<String> = capture {
         requireSignedInUserId()
+        val pubDoc = firestore.collection("public_profiles").document(userId).get().await()
+        val pubKey = pubDoc.getString("${cardType.lowercase()}PublicKey")
+        if (!pubKey.isNullOrBlank()) return@capture pubKey
+
         val cardDoc = firestore.collection("users").document(userId)
             .collection("cards").document(cardType).get().await()
         cardDoc.getString("publicKey") ?: run {
@@ -251,52 +290,47 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
         requireCaller(pass.issuerUserId)
         firestore.collection("contact_passes").document(pass.passId)
             .set(pass.toFirestoreMap()).await()
+        val cleanToken = pass.token.trim().uppercase()
+        val tokenHash = FortCryptoManager.sha256Hex(cleanToken)
+        firestore.collection("pass_tokens").document(tokenHash).set(
+            mapOf(
+                "tokenHash" to tokenHash,
+                "passId" to pass.passId,
+                "issuerUserId" to pass.issuerUserId,
+                "expiresAt" to pass.expiresAt,
+                "isClaimed" to false,
+                "isRevoked" to false
+            )
+        ).await()
         Unit
     }
 
     override suspend fun claimPass(token: String, claimantUserId: String, passId: String?): Result<RemotePassRecord> = capture {
         requireCaller(claimantUserId)
         val cleanToken = token.trim().uppercase()
-        val tokenVariants = listOf(
-            cleanToken,
-            token.trim(),
-            cleanToken.removePrefix("PASS-"),
-            if (!cleanToken.startsWith("PASS-")) "PASS-$cleanToken" else cleanToken
-        ).distinct()
+        val tokenHash = FortCryptoManager.sha256Hex(cleanToken)
 
-        var reference = if (!passId.isNullOrBlank()) {
-            val doc = firestore.collection("contact_passes").document(passId).get().await()
-            if (doc.exists()) doc.reference else null
-        } else null
-
-        if (reference == null) {
-            for (t in tokenVariants) {
-                val query = firestore.collection("contact_passes")
-                    .whereEqualTo("token", t)
-                    .limit(1)
-                    .get()
-                    .await()
-                val found = query.documents.firstOrNull()?.reference
-                if (found != null) {
-                    reference = found
-                    break
-                }
-            }
+        var effectivePassId = passId
+        if (effectivePassId.isNullOrBlank()) {
+            val tokenDoc = firestore.collection("pass_tokens").document(tokenHash).get().await()
+            effectivePassId = tokenDoc.getString("passId")
+        }
+        if (effectivePassId.isNullOrBlank()) {
+            // Also check token without prefix
+            val altHash = FortCryptoManager.sha256Hex(cleanToken.removePrefix("PASS-"))
+            val altDoc = firestore.collection("pass_tokens").document(altHash).get().await()
+            effectivePassId = altDoc.getString("passId")
+        }
+        if (effectivePassId.isNullOrBlank()) {
+            throw IllegalArgumentException("Pass not found. Check the invitation and try again.")
         }
 
-        if (reference == null) {
-            // Also check by passId equality in field
-            val queryByPassId = firestore.collection("contact_passes")
-                .whereEqualTo("passId", token.trim())
-                .limit(1)
-                .get()
-                .await()
-            reference = queryByPassId.documents.firstOrNull()?.reference
-        }
+        val passRef = firestore.collection("contact_passes").document(effectivePassId)
+        val tokenRef = firestore.collection("pass_tokens").document(tokenHash)
 
-        val passRef = reference ?: throw IllegalArgumentException("Pass not found. Check the invitation and try again.")
         firestore.runTransaction { transaction ->
             val snapshot = transaction.get(passRef)
+            if (!snapshot.exists()) throw IllegalArgumentException("Pass not found. Check the invitation and try again.")
             val pass = snapshot.toPassRecord()
             val now = System.currentTimeMillis()
             if (pass.isRevoked) throw SecurityException("This pass has been revoked.")
@@ -309,6 +343,13 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
                 passRef,
                 mapOf("isClaimed" to true, "claimantUserId" to claimantUserId)
             )
+            val tokenSnap = transaction.get(tokenRef)
+            if (tokenSnap.exists()) {
+                transaction.update(
+                    tokenRef,
+                    mapOf("isClaimed" to true, "claimantUserId" to claimantUserId)
+                )
+            }
             pass.copy(isClaimed = true, claimantUserId = claimantUserId)
         }.await()
     }
@@ -479,9 +520,10 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
 
         when (mode) {
             SearchMode.NAME -> {
-                val snapshot = firestore.collection("users")
-                    .whereGreaterThanOrEqualTo("displayName", trimmed)
-                    .whereLessThanOrEqualTo("displayName", trimmed + "\uf8ff")
+                val qLower = trimmed.lowercase()
+                val snapshot = firestore.collection("public_profiles")
+                    .whereGreaterThanOrEqualTo("normalizedDisplayName", qLower)
+                    .whereLessThanOrEqualTo("normalizedDisplayName", qLower + "\uf8ff")
                     .limit(20)
                     .get()
                     .await()
@@ -499,29 +541,34 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
                         fortId = fortId,
                         avatarEmoji = "🛡️",
                         isExistingConnection = false,
-                        hasVerifiedPhone = doc.getString("phoneNumber") != null
+                        hasVerifiedPhone = doc.getBoolean("hasVerifiedPhone") == true
                     )
                 }
             }
             SearchMode.FORT_ID -> {
-                val cleanFortId = if (trimmed.startsWith("@")) trimmed else "@$trimmed"
-                val baseFortId = cleanFortId.substringBefore(".").lowercase()
-                var snapshot = firestore.collection("users")
-                    .whereEqualTo("fortId", cleanFortId.lowercase())
+                val cleanFortId = if (trimmed.startsWith("@")) trimmed.lowercase() else "@${trimmed.lowercase()}"
+                var snapshot = firestore.collection("public_profiles")
+                    .whereEqualTo("fortId", cleanFortId)
                     .limit(1)
                     .get()
                     .await()
 
                 if (snapshot.isEmpty) {
-                    snapshot = firestore.collection("users")
+                    val baseFortId = cleanFortId.substringBefore(".").lowercase()
+                    snapshot = firestore.collection("public_profiles")
                         .whereEqualTo("fortId", "$baseFortId.fort")
                         .limit(1)
                         .get()
                         .await()
                 }
 
-                val doc = snapshot.documents.firstOrNull() ?: firestore.collection("users").document(trimmed).get().await()
-                if (!doc.exists()) emptyList()
+                val doc = snapshot.documents.firstOrNull() ?: run {
+                    val reservation = firestore.collection("fort_ids").document(cleanFortId).get().await()
+                    val targetUid = reservation.getString("userId")
+                    if (targetUid != null) firestore.collection("public_profiles").document(targetUid).get().await() else null
+                }
+
+                if (doc == null || !doc.exists()) emptyList()
                 else {
                     val uid = doc.getString("userId") ?: doc.id
                     val dName = doc.getString("displayName") ?: "Sovereign User"
@@ -533,21 +580,22 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
                             fortId = doc.getString("fortId") ?: cleanFortId,
                             avatarEmoji = "🛡️",
                             isExistingConnection = false,
-                            hasVerifiedPhone = doc.getString("phoneNumber") != null
+                            hasVerifiedPhone = doc.getBoolean("hasVerifiedPhone") == true
                         )
                     )
                 }
             }
             SearchMode.PHONE -> {
-                val myPhone = auth.currentUser?.phoneNumber
-                if (myPhone.isNullOrBlank()) {
+                val myProfile = firestore.collection("public_profiles").document(requesterUserId).get().await()
+                if (myProfile.getBoolean("hasVerifiedPhone") != true) {
                     throw IllegalStateException("Phone verification is required before you can discover peers by phone.")
                 }
                 val normalized = PhoneDiscoveryHelper.normalizeToE164(trimmed)
                     ?: throw IllegalArgumentException("Invalid phone number format. Include country code (e.g. +1234567890).")
+                val targetHash = FortCryptoManager.sha256Hex(normalized)
 
-                val snapshot = firestore.collection("users")
-                    .whereEqualTo("phoneNumber", normalized)
+                val snapshot = firestore.collection("public_profiles")
+                    .whereEqualTo("phoneHash", targetHash)
                     .limit(1)
                     .get()
                     .await()
@@ -575,7 +623,7 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
     }
 
     override suspend fun fetchUserProfile(userId: String): Result<UserSearchResult?> = capture {
-        val doc = firestore.collection("users").document(userId).get().await()
+        val doc = firestore.collection("public_profiles").document(userId).get().await()
         if (!doc.exists()) return@capture null
         val dName = doc.getString("displayName") ?: "Sovereign User"
         val fortId = doc.getString("fortId") ?: "@${dName.lowercase().replace(" ", "")}.fort"
@@ -585,7 +633,7 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
             fortId = fortId,
             avatarEmoji = "🛡️",
             isExistingConnection = false,
-            hasVerifiedPhone = doc.getString("phoneNumber") != null
+            hasVerifiedPhone = doc.getBoolean("hasVerifiedPhone") == true
         )
     }
 
@@ -630,19 +678,113 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
         Unit
     }
 
+    override fun listenToInboundPackets(recipientUserId: String): Flow<List<RemoteEncryptedPacket>> = callbackFlow {
+        val registration = firestore.collection("messages")
+            .whereEqualTo("recipientUserId", recipientUserId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    close(error)
+                    return@addSnapshotListener
+                }
+                val packets = snapshot?.documents?.mapNotNull { it.toEncryptedPacketOrNull() } ?: emptyList()
+                trySend(packets)
+            }
+        awaitClose { registration.remove() }
+    }
+
+    override fun listenToInboundKnockFirstRequests(recipientUserId: String): Flow<List<KnockFirstRequestEntity>> = callbackFlow {
+        val registration = firestore.collection("knock_first")
+            .whereEqualTo("recipientUserId", recipientUserId)
+            .whereEqualTo("status", "PENDING")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    close(error)
+                    return@addSnapshotListener
+                }
+                val reqs = snapshot?.documents?.mapNotNull { doc ->
+                    val reqId = doc.getString("requestId") ?: doc.id
+                    val sender = doc.getString("senderUserId") ?: return@mapNotNull null
+                    val senderName = doc.getString("senderDisplayName") ?: "Peer"
+                    val cardType = try {
+                        CardType.valueOf(doc.getString("senderCardType") ?: "PERSONAL")
+                    } catch (_: Exception) { CardType.PERSONAL }
+                    KnockFirstRequestEntity(
+                        requestId = reqId,
+                        recipientUserId = recipientUserId,
+                        senderUserId = sender,
+                        senderDisplayName = senderName,
+                        senderCardType = cardType,
+                        source = doc.getString("source") ?: "FORT_ID",
+                        rawMessage = doc.getString("rawMessage") ?: "",
+                        sandboxedLink = doc.getString("sandboxedLink"),
+                        timestamp = doc.getString("timestamp") ?: System.currentTimeMillis().toString(),
+                        status = doc.getString("status") ?: "PENDING"
+                    )
+                } ?: emptyList()
+                trySend(reqs)
+            }
+        awaitClose { registration.remove() }
+    }
+
+    override fun listenToOutboundKnockFirstRequests(senderUserId: String): Flow<List<KnockFirstRequestEntity>> = callbackFlow {
+        val registration = firestore.collection("knock_first")
+            .whereEqualTo("senderUserId", senderUserId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    close(error)
+                    return@addSnapshotListener
+                }
+                val reqs = snapshot?.documents?.mapNotNull { doc ->
+                    val reqId = doc.getString("requestId") ?: doc.id
+                    val recipient = doc.getString("recipientUserId") ?: return@mapNotNull null
+                    val senderName = doc.getString("senderDisplayName") ?: "Me"
+                    val cardType = try {
+                        CardType.valueOf(doc.getString("senderCardType") ?: "PERSONAL")
+                    } catch (_: Exception) { CardType.PERSONAL }
+                    KnockFirstRequestEntity(
+                        requestId = reqId,
+                        recipientUserId = recipient,
+                        senderUserId = senderUserId,
+                        senderDisplayName = senderName,
+                        senderCardType = cardType,
+                        source = doc.getString("source") ?: "FORT_ID",
+                        rawMessage = doc.getString("rawMessage") ?: "",
+                        sandboxedLink = doc.getString("sandboxedLink"),
+                        timestamp = doc.getString("timestamp") ?: System.currentTimeMillis().toString(),
+                        status = doc.getString("status") ?: "PENDING"
+                    )
+                } ?: emptyList()
+                trySend(reqs)
+            }
+        awaitClose { registration.remove() }
+    }
+
+    override fun listenToMessageDeliveryStatus(messageId: String): Flow<String> = callbackFlow {
+        val registration = firestore.collection("messages").document(messageId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    close(error)
+                    return@addSnapshotListener
+                }
+                val status = snapshot?.getString("deliveryStatus") ?: "PENDING"
+                trySend(status)
+            }
+        awaitClose { registration.remove() }
+    }
+
     override suspend fun updateUserDiscoveryPrivacy(
         userId: String,
         discoverableByName: Boolean,
         discoverableByPhone: Boolean
     ): Result<Unit> = capture {
         requireCaller(userId)
-        firestore.collection("users").document(userId).update(
-            mapOf(
-                "discoverableByName" to discoverableByName,
-                "discoverableByPhone" to discoverableByPhone,
-                "updatedAt" to System.currentTimeMillis()
-            )
-        ).await()
+        val updateMap = mapOf(
+            "discoverableByName" to discoverableByName,
+            "discoverableByPhone" to discoverableByPhone,
+            "updatedAt" to System.currentTimeMillis()
+        )
+        firestore.collection("users").document(userId).update(updateMap).await()
+        firestore.collection("public_profiles").document(userId).set(updateMap, SetOptions.merge()).await()
         Unit
     }
 
@@ -951,7 +1093,9 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
         "ivBase64" to ivBase64,
         "ephemeralKeyBase64" to ephemeralKeyBase64,
         "senderSignatureBase64" to senderSignatureBase64,
-        "timestamp" to timestamp
+        "timestamp" to timestamp,
+        "senderCardType" to senderCardType,
+        "recipientCardType" to recipientCardType
     )
 
     private fun DocumentSnapshot.toEncryptedPacketOrNull(): RemoteEncryptedPacket? {
@@ -969,7 +1113,9 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
             ivBase64 = iv,
             ephemeralKeyBase64 = ephemeralKey,
             senderSignatureBase64 = data["senderSignatureBase64"] as? String ?: "",
-            timestamp = (data["timestamp"] as? Number)?.toLong() ?: 0L
+            timestamp = (data["timestamp"] as? Number)?.toLong() ?: 0L,
+            senderCardType = data["senderCardType"] as? String ?: "PERSONAL",
+            recipientCardType = data["recipientCardType"] as? String ?: "PERSONAL"
         )
     }
 

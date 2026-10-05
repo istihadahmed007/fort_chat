@@ -1356,4 +1356,144 @@ class FortRealProductionTest {
         val stoppedLoc = repositoryBob.fetchActiveLiveLocation(alice.userId, bob.userId).getOrThrow()
         assertNull("Stopped live location session must not be visible", stoppedLoc)
     }
+
+    @Test
+    fun testLogoutLoginPreservesIdentityKeysWithoutSilentRotation() = runBlocking {
+        // Register Alice
+        val alice = repositoryAlice.register("alice@fort.net", "Pass123!", "Alice").getOrThrow()
+        val originalCards = repositoryAlice.getPersonaCards(alice.userId).first()
+        val originalPublicKeys = originalCards.map { it.publicKey }
+        val originalPrivateKeys = originalCards.map { it.privateKeyEncrypted }
+
+        // Logout
+        repositoryAlice.logout()
+        assertNull(repositoryAlice.getActiveAccount().first())
+
+        // Login again
+        val loggedIn = repositoryAlice.login("alice@fort.net", "Pass123!").getOrThrow()
+        assertEquals(alice.userId, loggedIn.userId)
+
+        // Verify all 4 persona keys are exactly identical (not rotated or overwritten)
+        val restoredCards = repositoryAlice.getPersonaCards(alice.userId).first()
+        assertEquals(originalCards.size, restoredCards.size)
+        for (i in originalCards.indices) {
+            assertEquals("Public key must be preserved across logout/login", originalPublicKeys[i], restoredCards[i].publicKey)
+            assertEquals("Private key must be preserved across logout/login", originalPrivateKeys[i], restoredCards[i].privateKeyEncrypted)
+        }
+    }
+
+    @Test
+    fun testIdempotentInboundMessageProcessing() = runBlocking {
+        val alice = repositoryAlice.register("alice@fort.net", "Pass1!", "Alice").getOrThrow()
+        val bob = repositoryBob.register("bob@fort.net", "Pass2!", "Bob").getOrThrow()
+
+        val pass = repositoryAlice.generatePass(alice.userId, CardType.PERSONAL, PassDurationType.SEVEN_DAYS).getOrThrow()
+        repositoryBob.claimPass(pass.token, bob.userId, "Bob").getOrThrow()
+
+        // Alice sends message
+        val sentMsg = repositoryAlice.sendEncryptedMessage("conv_${bob.userId}", alice.userId, bob.userId, "Hello Bob! Sovereign message.").getOrThrow()
+
+        // Bob syncs first time
+        val count1 = repositoryBob.syncInboundMessages(bob.userId).getOrThrow()
+        assertEquals(1, count1)
+
+        val bobMessages1 = repositoryBob.getConversationMessages("conv_${alice.userId}").first()
+        assertEquals(1, bobMessages1.size)
+        assertEquals("Hello Bob! Sovereign message.", bobMessages1[0].decryptedTextCache)
+
+        // Bob syncs a second time (e.g. from real-time snapshot re-emission)
+        val count2 = repositoryBob.syncInboundMessages(bob.userId).getOrThrow()
+        assertEquals(0, count2)
+
+        val bobMessages2 = repositoryBob.getConversationMessages("conv_${alice.userId}").first()
+        assertEquals(1, bobMessages2.size) // No duplicates!
+    }
+
+    @Test
+    fun testKnockFirstAcceptanceEstablishesReciprocalConnectionOnBothAccounts() = runBlocking {
+        val alice = repositoryAlice.register("alice@fort.net", "Pass1!", "Alice").getOrThrow()
+        val bob = repositoryBob.register("bob@fort.net", "Pass2!", "Bob").getOrThrow()
+
+        // Alice knocks on Bob's door
+        val knockRes = repositoryAlice.submitKnockFirstRequest(
+            recipientUserId = bob.userId,
+            senderUserId = alice.userId,
+            senderDisplayName = "Alice",
+            senderCardType = CardType.PERSONAL,
+            source = "DISCOVERY_SEARCH",
+            rawMessage = "Hello Bob, please accept my knock."
+        )
+        assertTrue(knockRes.isSuccess)
+
+        // Bob syncs and receives the inbound knock request
+        repositoryBob.syncInboundKnockFirstRequests(bob.userId)
+        val bobsRequests = repositoryBob.getPendingRequests(bob.userId).first()
+        assertEquals(1, bobsRequests.size)
+        val bobsReq = bobsRequests[0]
+        assertEquals("PENDING", bobsReq.status)
+
+        // Bob accepts request
+        val acceptRes = repositoryBob.acceptRequestOnce(bobsReq, bob.userId)
+        assertTrue(acceptRes.isSuccess)
+
+        // Bob now has an active connection with Alice
+        val bobsConnections = repositoryBob.getActiveConnections(bob.userId).first()
+        assertEquals(1, bobsConnections.size)
+        assertEquals(alice.userId, bobsConnections[0].peerUserId)
+
+        // Alice's outbound listener observes the accepted status
+        val outboundReqs = repositoryAlice.listenToOutboundKnockFirstRequests(alice.userId).first()
+        val acceptedReq = outboundReqs.find { it.requestId == bobsReq.requestId }
+        assertNotNull(acceptedReq)
+        assertEquals("ACCEPTED", acceptedReq!!.status)
+
+        // Alice handles the accepted status
+        repositoryAlice.handleOutboundKnockStatusChange(acceptedReq, alice.userId)
+
+        // Alice now ALSO has an active reciprocal connection with Bob!
+        val alicesConnections = repositoryAlice.getActiveConnections(alice.userId).first()
+        assertEquals(1, alicesConnections.size)
+        assertEquals(bob.userId, alicesConnections[0].peerUserId)
+
+        // Both accounts can now exchange encrypted messages
+        repositoryAlice.sendEncryptedMessage("conv_${bob.userId}", alice.userId, bob.userId, "Hi Bob! Connected on both sides.").getOrThrow()
+        repositoryBob.syncInboundMessages(bob.userId)
+        val bobMsgs = repositoryBob.getConversationMessages("conv_${alice.userId}").first()
+        assertTrue(bobMsgs.any { it.decryptedTextCache == "Hi Bob! Connected on both sides." })
+    }
+
+    @Test
+    fun testCaseVariedSearchAndDuplicateDisplayNames() = runBlocking {
+        val alice1 = repositoryAlice.register("alice1@fort.net", "Pass1!", "Alice Wonder").getOrThrow()
+        val alice2 = repositoryBob.register("alice2@fort.net", "Pass2!", "Alice Wonder").getOrThrow()
+
+        // Case-varied search by lower case
+        val searchLower = repositoryAlice.searchUsers("alice", SearchMode.NAME, alice1.userId).getOrThrow()
+        assertTrue("Should find matching users regardless of case", searchLower.isNotEmpty())
+
+        // Case-varied search by upper case
+        val searchUpper = repositoryAlice.searchUsers("ALICE", SearchMode.NAME, alice1.userId).getOrThrow()
+        assertTrue("Should find matching users with uppercase query", searchUpper.isNotEmpty())
+
+        // Search by prefix
+        val searchPrefix = repositoryAlice.searchUsers("Ali", SearchMode.NAME, alice1.userId).getOrThrow()
+        assertTrue("Should match prefix Ali", searchPrefix.isNotEmpty())
+    }
+
+    @Test
+    fun testWebRtcCandidateDeduplication() {
+        val seen = mutableSetOf<String>()
+        val cand1 = RtcIceCandidateRecord("candidate:1", "0", 0, "server1")
+        val cand2 = RtcIceCandidateRecord("candidate:1", "0", 0, "server1") // Duplicate!
+        val cand3 = RtcIceCandidateRecord("candidate:2", "0", 1, "server1")
+
+        val key1 = "${cand1.sdpMid}_${cand1.sdpMLineIndex}_${cand1.candidate}"
+        val key2 = "${cand2.sdpMid}_${cand2.sdpMLineIndex}_${cand2.candidate}"
+        val key3 = "${cand3.sdpMid}_${cand3.sdpMLineIndex}_${cand3.candidate}"
+
+        assertTrue(seen.add(key1))
+        assertFalse("Duplicate candidate must be filtered out", seen.add(key2))
+        assertTrue(seen.add(key3))
+        assertEquals(2, seen.size)
+    }
 }

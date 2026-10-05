@@ -232,7 +232,8 @@ fun FortNavGraph(
             onToggleMute = { viewModel.toggleMute() },
             onToggleSpeaker = { viewModel.toggleSpeaker() },
             onToggleVideo = { viewModel.toggleVideo() },
-            onSwitchCamera = { viewModel.switchCamera() }
+            onSwitchCamera = { viewModel.switchCamera() },
+            onPermissionGranted = { viewModel.onCallPermissionsGranted() }
         )
     }
 

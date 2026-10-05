@@ -126,6 +126,37 @@ class FortRepository(
         return Result.success(account)
     }
 
+    private suspend fun restoreOrInitLocalAccount(remoteUser: RemoteUserAccount, displayName: String): Result<UserAccountEntity> {
+        val existing = database.userAccountDao().getActiveAccountOnce()
+        if (existing != null && existing.userId == remoteUser.userId) {
+            return Result.success(existing)
+        }
+        val existingCards = database.personaCardDao().getCardsForUserOnce(remoteUser.userId)
+        if (existingCards.isNotEmpty()) {
+            val activeCardId = "card_${remoteUser.userId}_personal"
+            val effectiveName = displayName.ifBlank {
+                remoteUser.displayName.ifBlank {
+                    remoteUser.email.substringBefore("@").replaceFirstChar { it.uppercase() }
+                }
+            }
+            val restoredAccount = UserAccountEntity(
+                userId = remoteUser.userId,
+                email = remoteUser.email,
+                displayName = effectiveName,
+                phoneNumber = remoteUser.phoneNumber,
+                authToken = "tok_${UUID.randomUUID()}",
+                activeCardId = activeCardId,
+                biometricEnabled = false,
+                redactNotifications = true,
+                showOnlinePresence = true,
+                showTypingIndicator = true
+            )
+            database.userAccountDao().insertAccount(restoredAccount)
+            return Result.success(restoredAccount)
+        }
+        return initLocalUserAccount(remoteUser, displayName)
+    }
+
     suspend fun register(email: String, password: String, displayName: String): Result<UserAccountEntity> {
         val remoteResult = remoteBackend.register(email, password, displayName)
         if (remoteResult.isFailure) {
@@ -139,13 +170,7 @@ class FortRepository(
         val remoteResult = remoteBackend.login(email, password)
         if (remoteResult.isFailure) return Result.failure(remoteResult.exceptionOrNull()!!)
         val remoteUser = remoteResult.getOrThrow()
-
-        val existing = database.userAccountDao().getActiveAccountOnce()
-        return if (existing != null && existing.userId == remoteUser.userId) {
-            Result.success(existing)
-        } else {
-            initLocalUserAccount(remoteUser, remoteUser.displayName)
-        }
+        return restoreOrInitLocalAccount(remoteUser, remoteUser.displayName)
     }
 
     suspend fun sendPhoneOtp(phoneNumber: String, activity: Activity? = null): Result<String> {
@@ -156,26 +181,14 @@ class FortRepository(
         val result = remoteBackend.verifyPhoneOtp(verificationId, code, displayName)
         if (result.isFailure) return Result.failure(result.exceptionOrNull()!!)
         val remoteUser = result.getOrThrow()
-
-        val existing = database.userAccountDao().getActiveAccountOnce()
-        return if (existing != null && existing.userId == remoteUser.userId) {
-            Result.success(existing)
-        } else {
-            initLocalUserAccount(remoteUser, displayName.ifBlank { "Phone User ${remoteUser.phoneNumber?.takeLast(4) ?: "Sovereign"}" })
-        }
+        return restoreOrInitLocalAccount(remoteUser, displayName.ifBlank { "Phone User ${remoteUser.phoneNumber?.takeLast(4) ?: "Sovereign"}" })
     }
 
     suspend fun loginWithGoogle(idToken: String, displayName: String): Result<UserAccountEntity> {
         val result = remoteBackend.loginWithGoogle(idToken, displayName)
         if (result.isFailure) return Result.failure(result.exceptionOrNull()!!)
         val remoteUser = result.getOrThrow()
-
-        val existing = database.userAccountDao().getActiveAccountOnce()
-        return if (existing != null && existing.userId == remoteUser.userId) {
-            Result.success(existing)
-        } else {
-            initLocalUserAccount(remoteUser, displayName.ifBlank { "Google User" })
-        }
+        return restoreOrInitLocalAccount(remoteUser, displayName.ifBlank { "Google User" })
     }
 
     suspend fun sendPasswordReset(email: String): Result<Unit> {
@@ -270,6 +283,49 @@ class FortRepository(
             newCount++
         }
         return Result.success(newCount)
+    }
+
+    fun listenToInboundKnockFirstRequests(recipientUserId: String): Flow<List<KnockFirstRequestEntity>> {
+        return remoteBackend.listenToInboundKnockFirstRequests(recipientUserId)
+    }
+
+    fun listenToOutboundKnockFirstRequests(senderUserId: String): Flow<List<KnockFirstRequestEntity>> {
+        return remoteBackend.listenToOutboundKnockFirstRequests(senderUserId)
+    }
+
+    suspend fun handleOutboundKnockStatusChange(request: KnockFirstRequestEntity, currentUserId: String) {
+        database.knockFirstDao().insertRequest(request)
+        if (request.status == "ACCEPTED") {
+            val existing = database.peerConnectionDao().getConnectionWithPeer(currentUserId, request.recipientUserId)
+            if (existing == null) {
+                val peerPubKey = remoteBackend.fetchPublicKey(request.recipientUserId, CardType.PERSONAL.name).getOrDefault("")
+                val userCard = database.personaCardDao().getCardById(
+                    database.userAccountDao().getActiveAccountOnce()?.activeCardId ?: ""
+                )
+                val safetyNumber = if (userCard != null && peerPubKey.isNotEmpty()) {
+                    FortCryptoManager.computeSafetyNumber(userCard.publicKey, peerPubKey)
+                } else "Pending Key Verification"
+
+                val peerProfile = remoteBackend.fetchUserProfile(request.recipientUserId).getOrNull()
+                val peerName = peerProfile?.displayName ?: "Sovereign Peer"
+
+                val connection = PeerConnectionEntity(
+                    connectionId = "conn_${UUID.randomUUID()}",
+                    userId = currentUserId,
+                    peerUserId = request.recipientUserId,
+                    peerDisplayName = peerName,
+                    peerHandle = peerProfile?.fortId ?: "@peer.${request.recipientUserId.takeLast(6)}",
+                    peerCardType = CardType.PERSONAL,
+                    peerPublicKey = peerPubKey,
+                    safetyNumber = safetyNumber,
+                    isVerified = false,
+                    passType = PassDurationType.SEVEN_DAYS,
+                    passExpiresAt = System.currentTimeMillis() + 7 * 86400000L,
+                    status = "ACTIVE"
+                )
+                database.peerConnectionDao().insertConnection(connection)
+            }
+        }
     }
 
     suspend fun acceptRequestOnce(request: KnockFirstRequestEntity, currentUserId: String): Result<Unit> {
@@ -539,15 +595,17 @@ class FortRepository(
             fingerprint = FortCryptoManager.computeFingerprint(android.util.Base64.decode(senderCard.publicKey, android.util.Base64.NO_WRAP))
         )
 
-        // Retrieve recipient public key
-        val recipientKeyResult = remoteBackend.fetchPublicKey(recipientUserId, CardType.PERSONAL.name)
+        // Retrieve recipient public key matching the recipient's card type
+        val connection = database.peerConnectionDao().getConnectionWithPeer(senderUserId, recipientUserId)
+        val recipientCardType = connection?.peerCardType?.name ?: CardType.PERSONAL.name
+
+        val recipientKeyResult = remoteBackend.fetchPublicKey(recipientUserId, recipientCardType)
         if (recipientKeyResult.isFailure) {
             return Result.failure(recipientKeyResult.exceptionOrNull()!!)
         }
         val recipientPublicKey = recipientKeyResult.getOrThrow()
 
         // Check for peer key rotation
-        val connection = database.peerConnectionDao().getConnectionWithPeer(senderUserId, recipientUserId)
         if (connection != null && connection.peerPublicKey.isNotEmpty() && connection.peerPublicKey != recipientPublicKey) {
             database.peerConnectionDao().reportKeyRotation(connection.connectionId, recipientPublicKey)
         }
@@ -562,7 +620,7 @@ class FortRepository(
         val messageId = "msg_${UUID.randomUUID()}"
         val now = System.currentTimeMillis()
 
-        // Transmit only ciphertext payload and sender signature to server relay
+        // Transmit only ciphertext payload and sender signature to server relay, with persona card type metadata
         val packet = RemoteEncryptedPacket(
             packetId = messageId,
             senderUserId = senderUserId,
@@ -571,7 +629,9 @@ class FortRepository(
             ivBase64 = payload.ivBase64,
             ephemeralKeyBase64 = payload.ephemeralPublicKeyBase64,
             senderSignatureBase64 = payload.senderSignatureBase64,
-            timestamp = now
+            timestamp = now,
+            senderCardType = senderCard.type.name,
+            recipientCardType = recipientCardType
         )
 
         val transmitResult = remoteBackend.sendEncryptedPacket(packet)
@@ -609,41 +669,54 @@ class FortRepository(
         return if (transmitResult.isSuccess) Result.success(localEntity) else Result.failure(transmitResult.exceptionOrNull() ?: Exception("Queued offline"))
     }
 
-    suspend fun syncInboundMessages(currentUserId: String): Result<Int> {
-        val packetsResult = remoteBackend.fetchPacketsForUser(currentUserId)
-        if (packetsResult.isFailure) return Result.failure(packetsResult.exceptionOrNull()!!)
-        val packets = packetsResult.getOrThrow()
+    fun listenToInboundPackets(recipientUserId: String): Flow<List<RemoteEncryptedPacket>> {
+        return remoteBackend.listenToInboundPackets(recipientUserId)
+    }
 
-        val userCard = database.personaCardDao().getCardsForUser(currentUserId).firstOrNull()?.firstOrNull()
-            ?: return Result.success(0)
-
-        val decryptedPriv = try {
-            keyStoreMaster.decryptLocalData(userCard.privateKeyEncrypted)
-        } catch (e: Exception) {
-            userCard.privateKeyEncrypted
-        }
-
+    suspend fun processInboundPackets(packets: List<RemoteEncryptedPacket>, currentUserId: String): Int {
         var decryptedCount = 0
+        val allCards = database.personaCardDao().getCardsForUserOnce(currentUserId)
+        if (allCards.isEmpty()) return 0
+
         for (packet in packets) {
+            // Idempotency: skip if already in local Room database
+            if (database.chatMessageDao().getMessageById(packet.packetId) != null) {
+                continue
+            }
+
             try {
-                // Fetch sender public key for cryptographic signature verification
+                // Select matching recipient card for ECDH decryption based on packet metadata
+                val recipientCard = allCards.find { it.type.name.equals(packet.recipientCardType, ignoreCase = true) }
+                    ?: allCards.find { it.type == CardType.PERSONAL }
+                    ?: allCards.first()
+
+                val decryptedPriv = try {
+                    keyStoreMaster.decryptLocalData(recipientCard.privateKeyEncrypted)
+                } catch (e: Exception) {
+                    recipientCard.privateKeyEncrypted
+                }
+
+                // Fetch sender public key for the specific sender card type
+                val senderCardTypeStr = packet.senderCardType.ifBlank { CardType.PERSONAL.name }
                 val senderConn = database.peerConnectionDao().getConnectionWithPeer(currentUserId, packet.senderUserId)
-                val senderPubKey = senderConn?.peerPublicKey ?: remoteBackend.fetchPublicKey(packet.senderUserId, CardType.PERSONAL.name).getOrNull()
+                val senderPubKey = senderConn?.peerPublicKey?.takeIf { it.isNotBlank() }
+                    ?: remoteBackend.fetchPublicKey(packet.senderUserId, senderCardTypeStr).getOrNull()
 
                 if (senderConn == null && senderPubKey != null) {
                     val safetyNumber = FortCryptoManager.computeSafetyNumber(
-                        userCard.publicKey,
+                        recipientCard.publicKey,
                         senderPubKey
                     )
                     val peerProfile = remoteBackend.fetchUserProfile(packet.senderUserId).getOrNull()
                     val peerName = peerProfile?.displayName ?: "Pass Peer"
+                    val parsedSenderCardType = try { CardType.valueOf(senderCardTypeStr) } catch (_: Exception) { CardType.PERSONAL }
                     val autoConnection = PeerConnectionEntity(
-                        connectionId = "conn_${java.util.UUID.randomUUID()}",
+                        connectionId = "conn_${UUID.randomUUID()}",
                         userId = currentUserId,
                         peerUserId = packet.senderUserId,
                         peerDisplayName = peerName,
                         peerHandle = peerProfile?.fortId ?: "@peer.${packet.senderUserId.takeLast(6)}",
-                        peerCardType = CardType.PERSONAL,
+                        peerCardType = parsedSenderCardType,
                         peerPublicKey = senderPubKey,
                         safetyNumber = safetyNumber,
                         isVerified = false,
@@ -686,12 +759,21 @@ class FortRepository(
                     deliveryStatus = "DELIVERED"
                 )
                 database.chatMessageDao().insertMessage(localEntity)
+                remoteBackend.updateDeliveryStatus(packet.packetId, "DELIVERED", currentUserId)
                 decryptedCount++
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 // Ciphertext tampering or invalid signature fails closed
             }
         }
-        return Result.success(decryptedCount)
+        return decryptedCount
+    }
+
+    suspend fun syncInboundMessages(currentUserId: String): Result<Int> {
+        val packetsResult = remoteBackend.fetchPacketsForUser(currentUserId)
+        if (packetsResult.isFailure) return Result.failure(packetsResult.exceptionOrNull()!!)
+        val packets = packetsResult.getOrThrow()
+        val count = processInboundPackets(packets, currentUserId)
+        return Result.success(count)
     }
 
     suspend fun retryPendingOutbox(): Int {

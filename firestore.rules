@@ -11,9 +11,9 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    // 1. User Profiles & Persona Cards
+    // 1. Private User Accounts (Strictly Owner-Only: No broad reads of email or phone)
     match /users/{userId} {
-      allow read: if isAuthenticated();
+      allow read: if isOwner(userId);
       allow create, update, delete: if isOwner(userId);
 
       match /cards/{cardId} {
@@ -32,11 +32,25 @@ service cloud.firestore {
       }
     }
 
+    // Minimal Public Discovery Profiles (Safe fields only, no private emails or raw phone numbers)
+    match /public_profiles/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if isOwner(userId);
+    }
+
+    // Unique Fort ID Registry
+    match /fort_ids/{cleanFortId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
     // 2. End-to-End Encrypted Message Packets
     match /messages/{messageId} {
       allow create: if isAuthenticated() 
         && request.resource.data.senderUserId == request.auth.uid
         && request.resource.data.recipientUserId is string
+        && request.resource.data.recipientUserId != request.auth.uid
         && request.resource.data.ciphertextBase64 is string
         && request.resource.data.ivBase64 is string
         && request.resource.data.ephemeralKeyBase64 is string
@@ -62,9 +76,13 @@ service cloud.firestore {
     }
 
     // 3. Contact Passes & Bounded Invitations
-    // Enforces single-use token atomicity and deterministic revocation
+    // Anti-scraping: only issuer and claimant can read full pass document
     match /contact_passes/{passId} {
-      allow read: if isAuthenticated();
+      allow read: if isAuthenticated() && (
+        resource.data.issuerUserId == request.auth.uid || 
+        resource.data.claimantUserId == request.auth.uid
+      );
+
       allow create: if isAuthenticated() 
         && request.resource.data.issuerUserId == request.auth.uid
         && request.resource.data.isRevoked == false
@@ -91,10 +109,39 @@ service cloud.firestore {
       allow delete: if isAuthenticated() && resource.data.issuerUserId == request.auth.uid;
     }
 
+    // Secure Single-Use Pass Token Claims (Keyed by SHA-256 hash of token to prevent collection scraping)
+    match /pass_tokens/{tokenHash} {
+      allow read: if isAuthenticated();
+
+      allow create: if isAuthenticated() 
+        && request.resource.data.issuerUserId == request.auth.uid
+        && request.resource.data.isRevoked == false
+        && request.resource.data.isClaimed == false;
+
+      allow update: if isAuthenticated() && (
+        (resource.data.issuerUserId == request.auth.uid 
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRevoked']))
+        || (
+          resource.data.isRevoked == false
+          && request.time.toMillis() < resource.data.expiresAt
+          && (!resource.data.isSingleUse || resource.data.isClaimed == false)
+          && (!resource.data.isClaimed || resource.data.claimantUserId == request.auth.uid)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isClaimed', 'claimantUserId'])
+          && request.resource.data.isClaimed == true
+          && request.resource.data.claimantUserId == request.auth.uid
+          && !exists(/databases/$(database)/documents/users/$(resource.data.issuerUserId)/blocklist/$(request.auth.uid))
+        )
+      );
+
+      allow delete: if isAuthenticated() && resource.data.issuerUserId == request.auth.uid;
+    }
+
     // 4. Knock First Inbound Requests
     match /knock_first/{requestId} {
       allow create: if isAuthenticated()
         && request.resource.data.senderUserId == request.auth.uid
+        && request.resource.data.recipientUserId is string
+        && request.resource.data.recipientUserId != request.auth.uid
         && !exists(/databases/$(database)/documents/users/$(request.resource.data.recipientUserId)/blocklist/$(request.auth.uid));
       
       allow read: if isAuthenticated()
@@ -109,7 +156,6 @@ service cloud.firestore {
     }
 
     // 5. Private Rooms
-    // Ephemeral lifecycle-bound rooms: member cannot arbitrarily edit membership or grant access
     match /rooms/{roomId} {
       allow read: if isAuthenticated() 
         && (request.auth.uid in resource.data.members || resource.data.creatorId == request.auth.uid || (resource.data.adminIds is list && request.auth.uid in resource.data.adminIds));
@@ -119,12 +165,9 @@ service cloud.firestore {
         && request.auth.uid in request.resource.data.members;
 
       allow update: if isAuthenticated() && (
-        // Only admin or creator can edit members, admins, purpose, or close room
         (resource.data.creatorId == request.auth.uid || (resource.data.adminIds is list && request.auth.uid in resource.data.adminIds))
-        // Regular members can ONLY update shared task checklist
         || (request.auth.uid in resource.data.members 
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['tasksJson']))
-        // Member can leave room (remove themselves only)
         || (request.auth.uid in resource.data.members
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members'])
           && !(request.auth.uid in request.resource.data.members))
@@ -156,19 +199,38 @@ service cloud.firestore {
     match /calls/{callId} {
       allow create: if isAuthenticated()
         && request.resource.data.callerUserId == request.auth.uid
+        && request.resource.data.receiverUserId is string
+        && request.resource.data.receiverUserId != request.auth.uid
         && !exists(/databases/$(database)/documents/users/$(request.resource.data.receiverUserId)/blocklist/$(request.auth.uid));
 
       allow read: if isAuthenticated()
         && (resource.data.callerUserId == request.auth.uid || resource.data.receiverUserId == request.auth.uid);
 
-      allow update: if isAuthenticated()
-        && (resource.data.callerUserId == request.auth.uid || resource.data.receiverUserId == request.auth.uid);
+      // Caller can update offer/status; receiver can update answer/status. Participant IDs cannot be changed.
+      allow update: if isAuthenticated() && (
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['callerUserId', 'receiverUserId', 'callId', 'callType'])
+        && (
+          (resource.data.callerUserId == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'offerSdp'])) ||
+          (resource.data.receiverUserId == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'answerSdp']))
+        )
+      );
 
       allow delete: if isAuthenticated()
         && (resource.data.callerUserId == request.auth.uid || resource.data.receiverUserId == request.auth.uid);
 
+      // ICE candidates strictly restricted to the caller and receiver of this specific call
       match /candidates/{candidateId} {
-        allow read, write: if isAuthenticated();
+        allow read: if isAuthenticated() && (
+          get(/databases/$(database)/documents/calls/$(callId)).data.callerUserId == request.auth.uid ||
+          get(/databases/$(database)/documents/calls/$(callId)).data.receiverUserId == request.auth.uid
+        );
+
+        allow create: if isAuthenticated() && (
+          (get(/databases/$(database)/documents/calls/$(callId)).data.callerUserId == request.auth.uid && request.resource.data.isCaller == true) ||
+          (get(/databases/$(database)/documents/calls/$(callId)).data.receiverUserId == request.auth.uid && request.resource.data.isCaller == false)
+        );
+
+        allow update, delete: if false;
       }
     }
 
@@ -176,6 +238,7 @@ service cloud.firestore {
     match /live_locations/{shareId} {
       allow create: if isAuthenticated()
         && request.resource.data.senderUserId == request.auth.uid
+        && request.resource.data.recipientUserId is string
         && request.resource.data.expiresAt > request.time.toMillis();
 
       allow read: if isAuthenticated()
@@ -184,7 +247,8 @@ service cloud.firestore {
         && request.time.toMillis() < resource.data.expiresAt;
 
       allow update: if isAuthenticated()
-        && resource.data.senderUserId == request.auth.uid;
+        && resource.data.senderUserId == request.auth.uid
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['senderUserId', 'recipientUserId', 'shareId']);
 
       allow delete: if isAuthenticated()
         && (resource.data.senderUserId == request.auth.uid || resource.data.recipientUserId == request.auth.uid);

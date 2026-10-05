@@ -34,7 +34,9 @@ data class RemoteEncryptedPacket(
     val ivBase64: String,
     val ephemeralKeyBase64: String,
     val senderSignatureBase64: String = "",
-    val timestamp: Long
+    val timestamp: Long,
+    val senderCardType: String = "PERSONAL",
+    val recipientCardType: String = "PERSONAL"
 )
 
 data class RemotePassRecord(
@@ -104,6 +106,12 @@ interface FortRemoteBackend {
     suspend fun setTypingStatus(userId: String, recipientUserId: String, isTyping: Boolean): Result<Unit>
     fun listenToTypingStatus(recipientUserId: String, senderUserId: String): Flow<Boolean>
     suspend fun updateDeliveryStatus(messageId: String, status: String, recipientUserId: String): Result<Unit>
+
+    // --- Messaging & Knock First Real-Time Sync ---
+    fun listenToInboundPackets(recipientUserId: String): Flow<List<RemoteEncryptedPacket>>
+    fun listenToInboundKnockFirstRequests(recipientUserId: String): Flow<List<KnockFirstRequestEntity>>
+    fun listenToOutboundKnockFirstRequests(senderUserId: String): Flow<List<KnockFirstRequestEntity>>
+    fun listenToMessageDeliveryStatus(messageId: String): Flow<String>
 
     // --- Knock First Server Sync ---
     suspend fun submitKnockFirstRequest(request: KnockFirstRequestEntity): Result<Unit>
@@ -336,6 +344,7 @@ class InMemoryRemoteRelay : FortRemoteBackend {
             return Result.failure(SecurityException("Server Authorization: Inbound transmission denied. Sender is blocked by recipient."))
         }
         packets.add(packet)
+        inboundPacketFlows[packet.recipientUserId]?.value = packets.filter { it.recipientUserId == packet.recipientUserId }
         return Result.success(Unit)
     }
 
@@ -443,6 +452,10 @@ class InMemoryRemoteRelay : FortRemoteBackend {
     private val callStateFlows = ConcurrentHashMap<String, MutableStateFlow<RemoteCallRecord?>>()
     private val candidateFlows = ConcurrentHashMap<String, MutableStateFlow<List<RtcIceCandidateRecord>>>()
     private val typingFlows = ConcurrentHashMap<Pair<String, String>, MutableStateFlow<Boolean>>()
+    private val inboundPacketFlows = ConcurrentHashMap<String, MutableStateFlow<List<RemoteEncryptedPacket>>>()
+    private val inboundKnockFlows = ConcurrentHashMap<String, MutableStateFlow<List<KnockFirstRequestEntity>>>()
+    private val outboundKnockFlows = ConcurrentHashMap<String, MutableStateFlow<List<KnockFirstRequestEntity>>>()
+    private val deliveryStatusFlows = ConcurrentHashMap<String, MutableStateFlow<String>>()
 
     override suspend fun setTypingStatus(userId: String, recipientUserId: String, isTyping: Boolean): Result<Unit> {
         val key = Pair(userId, recipientUserId)
@@ -458,10 +471,36 @@ class InMemoryRemoteRelay : FortRemoteBackend {
     }
 
     override suspend fun updateDeliveryStatus(messageId: String, status: String, recipientUserId: String): Result<Unit> {
-        packets.find { it.packetId == messageId }?.let {
-            // Updated in memory packet list
-        }
+        deliveryStatusFlows[messageId]?.value = status
         return Result.success(Unit)
+    }
+
+    override fun listenToInboundPackets(recipientUserId: String): Flow<List<RemoteEncryptedPacket>> {
+        val flow = inboundPacketFlows.computeIfAbsent(recipientUserId) {
+            MutableStateFlow(packets.filter { it.recipientUserId == recipientUserId })
+        }
+        return flow.asStateFlow()
+    }
+
+    override fun listenToInboundKnockFirstRequests(recipientUserId: String): Flow<List<KnockFirstRequestEntity>> {
+        val flow = inboundKnockFlows.computeIfAbsent(recipientUserId) {
+            MutableStateFlow(knockFirstRequests.values.filter { it.recipientUserId == recipientUserId && it.status == "PENDING" }.sortedByDescending { it.timestamp })
+        }
+        return flow.asStateFlow()
+    }
+
+    override fun listenToOutboundKnockFirstRequests(senderUserId: String): Flow<List<KnockFirstRequestEntity>> {
+        val flow = outboundKnockFlows.computeIfAbsent(senderUserId) {
+            MutableStateFlow(knockFirstRequests.values.filter { it.senderUserId == senderUserId }.sortedByDescending { it.timestamp })
+        }
+        return flow.asStateFlow()
+    }
+
+    override fun listenToMessageDeliveryStatus(messageId: String): Flow<String> {
+        val flow = deliveryStatusFlows.computeIfAbsent(messageId) {
+            MutableStateFlow("SENT")
+        }
+        return flow.asStateFlow()
     }
 
     override suspend fun fetchUserProfile(userId: String): Result<UserSearchResult?> {
@@ -571,6 +610,7 @@ class InMemoryRemoteRelay : FortRemoteBackend {
             return Result.failure(SecurityException("Sender is blocked by recipient."))
         }
         knockFirstRequests[request.requestId] = request
+        notifyKnockFlows(request.recipientUserId, request.senderUserId)
         return Result.success(Unit)
     }
 
@@ -586,8 +626,19 @@ class InMemoryRemoteRelay : FortRemoteBackend {
         if (req.recipientUserId != recipientUserId) {
             return Result.failure(SecurityException("Only the recipient can update request status."))
         }
-        knockFirstRequests[requestId] = req.copy(status = status)
+        val updated = req.copy(status = status)
+        knockFirstRequests[requestId] = updated
+        notifyKnockFlows(updated.recipientUserId, updated.senderUserId)
         return Result.success(Unit)
+    }
+
+    private fun notifyKnockFlows(recipientUserId: String, senderUserId: String) {
+        inboundKnockFlows[recipientUserId]?.value = knockFirstRequests.values
+            .filter { it.recipientUserId == recipientUserId && it.status == "PENDING" }
+            .sortedByDescending { it.timestamp }
+        outboundKnockFlows[senderUserId]?.value = knockFirstRequests.values
+            .filter { it.senderUserId == senderUserId }
+            .sortedByDescending { it.timestamp }
     }
 
     override suspend fun createCall(call: RemoteCallRecord): Result<Unit> {

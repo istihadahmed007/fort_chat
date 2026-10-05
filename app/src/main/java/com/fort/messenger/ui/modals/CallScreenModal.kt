@@ -57,7 +57,8 @@ fun CallScreenModal(
     onToggleMute: () -> Unit,
     onToggleSpeaker: () -> Unit,
     onToggleVideo: () -> Unit,
-    onSwitchCamera: () -> Unit
+    onSwitchCamera: () -> Unit,
+    onPermissionGranted: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var callDurationSeconds by remember { mutableLongStateOf(0L) }
@@ -84,12 +85,29 @@ fun CallScreenModal(
             ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         )
     }
+    var permissionDenied by remember { mutableStateOf(false) }
+
+    val isPermissionGranted = hasAudioPermission && (session.callType != CallType.VIDEO || hasCameraPermission)
+
+    LaunchedEffect(isPermissionGranted) {
+        if (isPermissionGranted) {
+            permissionDenied = false
+            onPermissionGranted()
+        }
+    }
 
     val permissionsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { perms ->
         hasAudioPermission = perms[Manifest.permission.RECORD_AUDIO] == true
         hasCameraPermission = perms[Manifest.permission.CAMERA] == true
+        val granted = hasAudioPermission && (session.callType != CallType.VIDEO || hasCameraPermission)
+        if (granted) {
+            permissionDenied = false
+            onPermissionGranted()
+        } else {
+            permissionDenied = true
+        }
     }
 
     LaunchedEffect(session.callType) {
@@ -98,6 +116,8 @@ fun CallScreenModal(
         if (session.callType == CallType.VIDEO && !hasCameraPermission) needed.add(Manifest.permission.CAMERA)
         if (needed.isNotEmpty()) {
             permissionsLauncher.launch(needed.toTypedArray())
+        } else {
+            onPermissionGranted()
         }
     }
 
@@ -398,6 +418,71 @@ fun CallScreenModal(
                                 tint = Color.White,
                                 modifier = Modifier.size(32.dp)
                             )
+                        }
+                    }
+                }
+            }
+
+            // Permission Denial Explanation Overlay
+            if (permissionDenied) {
+                Card(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(24.dp)
+                        .fillMaxWidth(),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xF20F172A)),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, IceBlueBorder)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "🛡️ Permission Required",
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = if (session.callType == CallType.VIDEO)
+                                "Microphone and Camera permissions are required to start this encrypted video call. Fort cannot initialize media without your consent."
+                            else
+                                "Microphone permission is required to start this encrypted voice call. Fort cannot initialize media without your consent.",
+                            fontSize = 14.sp,
+                            color = Color(0xFFBAE6FD),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    if (isIncomingPrompt) onDeclineCall() else onEndCall()
+                                },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("Cancel", color = Color(0xFFFDA4AF))
+                            }
+                            Button(
+                                onClick = {
+                                    val needed = mutableListOf<String>()
+                                    if (!hasAudioPermission) needed.add(Manifest.permission.RECORD_AUDIO)
+                                    if (session.callType == CallType.VIDEO && !hasCameraPermission) needed.add(Manifest.permission.CAMERA)
+                                    if (needed.isNotEmpty()) {
+                                        permissionsLauncher.launch(needed.toTypedArray())
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary)
+                            ) {
+                                Text("Retry", color = Color.White)
+                            }
                         }
                     }
                 }

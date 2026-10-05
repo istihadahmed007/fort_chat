@@ -154,15 +154,34 @@ FORT includes a factory (`FortBackendFactory`) that initializes real production 
 The app now uses Firebase Authentication and Cloud Firestore for production accounts and messaging. Without a valid `google-services.json`, cloud authentication and messaging report that setup is missing; they do not create demo accounts or show fake success. CI can compile and run local tests without your Firebase project, but it cannot verify live sign-in or cloud access.
 
 ### 6.2 Security Rules Overview (`firestore.rules`)
-* **Messages (`/messages/{messageId}`):** Only designated recipient or sender can read ciphertext packets. Senders cannot transmit to recipients where they are blocked. Recipient delivery/read receipts, participant reaction maps, and sender edits/deletions are strictly governed.
-* **Contact Passes (`/contact_passes/{passId}`):** Single-use passes cannot be claimed twice (`isClaimed == false`). Revoked or expired passes cannot be claimed. Atomic transactions serialize claims.
+* **Private Accounts (`/users/{userId}`):** Strictly owner-only (`request.auth.uid == userId`). Prohibits broad authenticated reads of full account profiles to prevent exposing sensitive email addresses, raw phone numbers, and private session tokens.
+* **Minimal Public Profiles (`/public_profiles/{userId}`):** Minimal discovery projection containing only safe, non-sensitive fields (`displayName`, `normalizedDisplayName`, `fortId`, `phoneHash`, `hasVerifiedPhone`, `discoverableByName`, `discoverableByPhone`).
+* **Unique Fort ID Registry (`/fort_ids/{cleanFortId}`):** Uniqueness reservation enforcing one owner per Fort ID.
+* **Encrypted Message Packets (`/messages/{messageId}`):** Only designated recipient or sender can read ciphertext packets. Senders cannot transmit to recipients where they are blocked. Recipient delivery/read receipts, participant reaction maps, and sender edits/deletions are strictly governed.
+* **Anti-Scraping Contact Passes (`/contact_passes/{passId}`):** Readable exclusively by the pass issuer and the verified claimant. Prohibits global collection reads or token scraping.
+* **Secure Pass Token Claims (`/pass_tokens/{tokenHash}`):** Keyed by SHA-256 hash of the invitation token. Enforces atomic single-use claims, expiration validation, and deterministic revocation without exposing a scrapeable registry.
+* **WebRTC Signaling & ICE Isolation (`/calls/{callId}`):** Strictly restricted to the caller and receiver of that specific call. Participants cannot alter `callerUserId` or `receiverUserId`. ICE candidates in `/calls/{callId}/candidates/{candidateId}` can only be read or written by the active call participants.
 * **Rooms (`/rooms/{roomId}`):** Only room creator or designated admins can modify members or update room configurations; ordinary members can update tasks or leave.
 * **Moods (`/moods/{userId}`):** Only authorized audience (`PRIVATE`, `CONNECTIONS`, `SELECTED_PEOPLE`, `CIRCLES`) can query a peer's mood. Expired moods are rejected.
 * **Blocklists (`/users/{userId}/blocklist/{blockedUserId}`):** Users can manage their blocklist; authenticated peers can query their own block status.
 
-### 6.3 Real-Time Calling & WebRTC Signaling Notice
-* Knock First protects against unsolicited peer-to-peer calling connections.
-* To activate live WebRTC audio/video calling in production, an external WebRTC signaling service and STUN/TURN credentials (e.g. Coturn or Twilio Network Traversal) must be configured in `WebRtcEngine.kt`. The app UI clearly displays calling availability rather than simulating a fake call.
+### 6.3 Real-Time Calling & TURN Configuration
+FORT uses WebRTC Unified Plan for end-to-end media streaming with standard STUN fallbacks (`stun.l.google.com:19302`). In enterprise or symmetric NAT networks, a TURN relay is required.
+To configure a production TURN server without embedding static credentials into the APK binary:
+1. Provide system environment variables or Java system properties at startup or container launch:
+   - `FORT_TURN_HOST`: Hostname and port of your TURN server (e.g., `turn.yourdomain.com:3478` or `coturn.yourdomain.com:5349`).
+   - `FORT_TURN_USER`: Ephemeral username or auth secret.
+   - `FORT_TURN_PASS`: Ephemeral credential or password.
+2. The `WebRtcCallManager` automatically loads these credentials dynamically and appends them to the ICE server list during call negotiation.
+
+### 6.4 Firebase Emulator Rules Test Suite
+The security rules and permission boundaries are verified against the real Firebase Firestore Emulator:
+```powershell
+$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+$env:Path = "$env:JAVA_HOME\bin;" + $env:Path
+npx firebase-tools emulators:exec --only firestore run_rules_test.bat
+```
+Validates 24 security assertions including unauthorized profile read blocking, pass token scraping prevention, call candidate snooping rejection, participant alteration denial, and cross-user spoofing rejection.
 
 ---
 
