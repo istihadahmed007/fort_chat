@@ -133,6 +133,11 @@ class FortRepository(
         return Result.success(account)
     }
 
+    private fun isMissingRemotePublicKey(error: Throwable): Boolean {
+        return error is IllegalStateException
+            && error.message.orEmpty().startsWith("No public key registered")
+    }
+
     private suspend fun restoreOrInitLocalAccount(
         remoteUser: RemoteUserAccount,
         displayName: String,
@@ -168,8 +173,9 @@ class FortRepository(
 
         // Fresh install / new device: never rotate identity keys when the remote check failed.
         val remotePersonalKeyResult = remoteBackend.fetchPublicKey(remoteUser.userId, CardType.PERSONAL.name)
-        if (remotePersonalKeyResult.isFailure) {
-            return Result.failure(remotePersonalKeyResult.exceptionOrNull()!!)
+        val remotePersonalKeyError = remotePersonalKeyResult.exceptionOrNull()
+        if (remotePersonalKeyError != null && !isMissingRemotePublicKey(remotePersonalKeyError)) {
+            return Result.failure(remotePersonalKeyError)
         }
         val remotePersonalKey = remotePersonalKeyResult.getOrNull()
         if (!remotePersonalKey.isNullOrBlank() && !forceKeyReset) {

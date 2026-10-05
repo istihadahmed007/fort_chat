@@ -40,6 +40,8 @@ class FortRealProductionTest {
     private lateinit var serverRelay: InMemoryRemoteRelay
     private lateinit var repositoryAlice: FortRepository
     private lateinit var repositoryBob: FortRepository
+    private lateinit var keyStoreMasterAlice: KeyStoreMaster
+    private lateinit var keyStoreMasterBob: KeyStoreMaster
 
     @Before
     fun setUp() {
@@ -48,8 +50,10 @@ class FortRealProductionTest {
         databaseBob = FortDatabase.createInMemory(context)
         serverRelay = InMemoryRemoteRelay()
 
-        repositoryAlice = FortRepository(databaseAlice, serverRelay)
-        repositoryBob = FortRepository(databaseBob, serverRelay)
+        keyStoreMasterAlice = KeyStoreMaster()
+        keyStoreMasterBob = KeyStoreMaster()
+        repositoryAlice = FortRepository(databaseAlice, serverRelay, keyStoreMasterAlice)
+        repositoryBob = FortRepository(databaseBob, serverRelay, keyStoreMasterBob)
     }
 
     @After
@@ -1568,7 +1572,8 @@ class FortRealProductionTest {
 
         // Device 2 with fresh database
         val databaseDevice2 = FortDatabase.createInMemory(context)
-        val repositoryDevice2 = FortRepository(databaseDevice2, serverRelay)
+        val keyStoreMasterDevice2 = KeyStoreMaster()
+        val repositoryDevice2 = FortRepository(databaseDevice2, serverRelay, keyStoreMasterDevice2)
         val remoteBob = RemoteUserAccount(userId = bob.userId, email = bob.email, passwordHash = "hash123", displayName = bob.displayName, fortId = "@bobvault.fort")
 
         // Restoring with wrong passphrase fails
@@ -1586,8 +1591,8 @@ class FortRealProductionTest {
         assertEquals(4, restoredCards.size)
         val restoredPersonal = restoredCards.find { it.type == CardType.PERSONAL }!!
         assertEquals("Restored public key matches original", origPersonalCard.publicKey, restoredPersonal.publicKey)
-        val originalPrivateKey = KeyStoreMaster().decryptLocalData(origPersonalCard.privateKeyEncrypted)
-        val restoredPrivateKey = KeyStoreMaster().decryptLocalData(restoredPersonal.privateKeyEncrypted)
+        val originalPrivateKey = keyStoreMasterBob.decryptLocalData(origPersonalCard.privateKeyEncrypted)
+        val restoredPrivateKey = keyStoreMasterDevice2.decryptLocalData(restoredPersonal.privateKeyEncrypted)
         assertEquals("Restored private key is re-encrypted for this device with the same key material", originalPrivateKey, restoredPrivateKey)
 
         databaseDevice2.close()
