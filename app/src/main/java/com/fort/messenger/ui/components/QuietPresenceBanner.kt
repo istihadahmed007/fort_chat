@@ -26,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fort.messenger.model.MoodRingState
+import com.fort.messenger.viewmodel.AppLanguage
 import com.fort.messenger.ui.theme.IceBlueBorder
 import com.fort.messenger.ui.theme.IceBlueTint
 import com.fort.messenger.ui.theme.RoyalBluePrimary
@@ -34,6 +35,7 @@ import com.fort.messenger.ui.theme.RoyalBluePrimary
 fun QuietPresenceBanner(
     moodState: MoodRingState?,
     onOpenMoodPicker: () -> Unit,
+    language: AppLanguage = AppLanguage.ENGLISH,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -66,7 +68,13 @@ fun QuietPresenceBanner(
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = if (moodState != null) "Quiet Presence: ${moodState.emotion.title}" else "Set Your Quiet Presence",
+                        text = if (moodState != null) {
+                            "Quiet Presence: ${moodState.emotion.title}"
+                        } else if (language == AppLanguage.BANGLA) {
+                            "Quiet Presence নির্ধারণ করুন"
+                        } else {
+                            "Set your Quiet Presence"
+                        },
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = RoyalBluePrimary
@@ -83,7 +91,7 @@ fun QuietPresenceBanner(
                     text = if (moodState != null) {
                         "Visible to ${moodState.sharingCircleName} • ${moodState.remainingTimeString}"
                     } else {
-                        "Broadcast emotional boundaries with time decay"
+                        if (language == AppLanguage.BANGLA) "কে দেখবে এবং কখন এটি শেষ হবে তা বেছে নিন" else "Choose who can see it and when it expires"
                     },
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant

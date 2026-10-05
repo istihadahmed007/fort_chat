@@ -66,8 +66,8 @@ fun KnockFirstRequestsScreen(
     Scaffold(
         topBar = {
             SovereignTopBar(
-                title = if (uiState.currentLanguage == AppLanguage.BANGLA) "নক ফার্স্ট রিকোয়েস্ট" else "Knock First Queue",
-                subtitle = "Inbound Sandboxed Verification"
+                title = if (uiState.currentLanguage == AppLanguage.BANGLA) "নক ফার্স্ট অনুরোধ" else "Knock First requests",
+                subtitle = if (uiState.currentLanguage == AppLanguage.BANGLA) "সংযোগের আগে প্রতিটি অনুরোধ পর্যালোচনা করুন" else "Review each request before connecting"
             )
         },
         containerColor = MaterialTheme.colorScheme.background,
@@ -81,12 +81,8 @@ fun KnockFirstRequestsScreen(
             contentPadding = PaddingValues(top = 16.dp, bottom = 80.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Educational Sandbox Explanation Banner
             item {
-                SovereignCard(
-                    backgroundColor = Color(0xFFEFF6FF),
-                    borderColor = IceBlueBorder
-                ) {
+                SovereignCard(modifier = Modifier.fillMaxWidth()) {
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
@@ -97,58 +93,29 @@ fun KnockFirstRequestsScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = if (uiState.currentLanguage == AppLanguage.BANGLA) "নক ফার্স্ট প্রোটোকল স্যান্ডবক্স" else "Knock First Protocol Active",
+                                text = if (uiState.currentLanguage == AppLanguage.BANGLA) {
+                                    "সংযোগের আগে আপনার সিদ্ধান্ত"
+                                } else {
+                                    "You decide before connecting"
+                                },
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = RoyalBluePrimary
                             )
                         }
 
-                        Spacer(modifier = Modifier.height(6.dp))
-
-                        Text(
-                            text = if (uiState.currentLanguage == AppLanguage.BANGLA)
-                                "অপরিচিত প্রেরকদের কল, ভয়েস নোট এবং স্বয়ংক্রিয় মিডিয়া ডাউনলোড ব্লক করা থাকে। লিংকগুলো প্লেইন টেক্সট হিসেবে থাকে যা ট্র্যাকিং রোধ করে।"
-                            else
-                                "Inbound entities cannot call, send voice notes, or trigger media downloads prior to verification. External links are isolated as non-clickable plain text without OpenGraph crawlers.",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Outlined.PhoneDisabled,
-                                    contentDescription = null,
-                                    tint = Color(0xFF64748B),
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Calls Blocked", fontSize = 11.sp, color = Color(0xFF64748B))
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Outlined.VoiceOverOff,
-                                    contentDescription = null,
-                                    tint = Color(0xFF64748B),
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Voice Muted", fontSize = 11.sp, color = Color(0xFF64748B))
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Outlined.LinkOff,
-                                    contentDescription = null,
-                                    tint = Color(0xFF64748B),
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Links Sandboxed", fontSize = 11.sp, color = Color(0xFF64748B))
-                            }
-                        }
+                        Text(
+                            text = if (uiState.currentLanguage == AppLanguage.BANGLA) {
+                                "সিদ্ধান্তের আগে পরিচিতি বার্তাটি পর্যালোচনা করুন। অনুরোধ পেলেই কথোপকথন শুরু হয় না; গ্রহণ করার পরেই কল করা যায়।"
+                            } else {
+                                "Review the introduction before deciding. A request does not start a conversation; calls are only available after you accept."
+                            },
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = 19.sp
+                        )
                     }
                 }
             }
@@ -158,25 +125,51 @@ fun KnockFirstRequestsScreen(
                     SovereignCard(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 32.dp)
+                            .padding(vertical = 16.dp),
+                        shape = RoundedCornerShape(24.dp)
                     ) {
                         Column(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 12.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Text(text = "🛡️", fontSize = 36.sp)
-                            Spacer(modifier = Modifier.height(10.dp))
+                            Box(
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primaryContainer),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Shield,
+                                    contentDescription = null,
+                                    tint = RoyalBluePrimary,
+                                    modifier = Modifier.size(30.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(16.dp))
                             Text(
-                                text = "Knock First Queue Clean",
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 16.sp,
+                                text = if (uiState.currentLanguage == AppLanguage.BANGLA) {
+                                    "কোনো অপেক্ষমাণ অনুরোধ নেই"
+                                } else {
+                                    "No pending requests"
+                                },
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 18.sp,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
-                            Spacer(modifier = Modifier.height(4.dp))
+                            Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "All inbound contacts are verified. No unreviewed knocks.",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                text = if (uiState.currentLanguage == AppLanguage.BANGLA) {
+                                    "অনুরোধগুলো এখানে দেখা যাবে। প্রতিটি অনুরোধ গ্রহণ, প্রত্যাখ্যান বা ব্লক করবেন কি না, তা আপনি ঠিক করবেন।"
+                                } else {
+                                    "Requests will appear here. You decide whether to accept, decline, or block each one."
+                                },
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                lineHeight = 19.sp
                             )
                         }
                     }

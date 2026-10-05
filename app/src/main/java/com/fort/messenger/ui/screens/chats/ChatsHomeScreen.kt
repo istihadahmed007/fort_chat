@@ -76,16 +76,37 @@ fun ChatsHomeScreen(
         topBar = {
             SovereignTopBar(
                 title = if (uiState.currentLanguage == AppLanguage.BANGLA) "চ্যাটস" else "Chats",
-                subtitle = "Bounded & Private Comms",
+                subtitle = if (uiState.currentLanguage == AppLanguage.BANGLA) "আপনার ব্যক্তিগত কথোপকথন" else "Your private conversations",
                 activeCard = activeCard,
                 onActiveCardClick = { /* Can switch persona from top bar */ },
                 onScanQrClick = { viewModel.openPassScanner() }
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = { viewModel.openNewChatMenu() },
-                containerColor = RoyalBluePrimary,
+            if (uiState.conversations.isNotEmpty()) {
+                FloatingActionButton(
+                    onClick = { viewModel.openNewChatMenu() },
+                    containerColor = RoyalBluePrimary,
+                    contentColor = Color.White,
+                    shape = CircleShape,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(imageVector = Icons.Default.Add, contentDescription = "New chat")
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (uiState.currentLanguage == AppLanguage.BANGLA) "নতুন চ্যাট" else "New chat",
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp
+                        )
+                    }
+                }
+            }
+        },
+        containerColor = RoyalBluePrimary,
                 contentColor = Color.White,
                 shape = CircleShape,
                 modifier = Modifier.padding(bottom = 12.dp)
@@ -119,120 +140,187 @@ fun ChatsHomeScreen(
             item {
                 QuietPresenceBanner(
                     moodState = uiState.moodState,
-                    onOpenMoodPicker = { viewModel.openMoodPicker() }
+                    onOpenMoodPicker = { viewModel.openMoodPicker() },
+                    language = uiState.currentLanguage
                 )
             }
 
-            // Filter Chips Bar
-            item {
-                FilterChipBar(
-                    selectedFilter = uiState.selectedFilter,
-                    onFilterSelected = { viewModel.selectFilter(it) }
-                )
+            if (uiState.conversations.isNotEmpty()) {
+                item {
+                    FilterChipBar(
+                        selectedFilter = uiState.selectedFilter,
+                        onFilterSelected = { viewModel.selectFilter(it) }
+                    )
+                }
             }
 
-            // Conversation list header
-            item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp, vertical = 2.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = if (uiState.currentLanguage == AppLanguage.BANGLA) "সক্রিয় চ্যাটসমূহ" else "Active Conversations",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = "${filteredConversations.size} passes",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+            if (filteredConversations.isNotEmpty()) {
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (uiState.currentLanguage == AppLanguage.BANGLA) "কথোপকথন" else "Conversations",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = if (uiState.currentLanguage == AppLanguage.BANGLA) {
+                                "${filteredConversations.size}টি কথোপকথন"
+                            } else {
+                                val count = filteredConversations.size
+                                "$count ${if (count == 1) "conversation" else "conversations"}"
+                            },
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
 
             // Conversation Rows
             if (filteredConversations.isEmpty()) {
+                val hasNoConversations = uiState.conversations.isEmpty()
                 item {
                     SovereignCard(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 16.dp)
+                            .padding(vertical = if (hasNoConversations) 12.dp else 16.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        elevation = 2.dp
                     ) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(16.dp),
+                                .padding(vertical = 12.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Text(text = "🕊️", fontSize = 36.sp)
-                            Spacer(modifier = Modifier.height(10.dp))
+                            Box(
+                                modifier = Modifier
+                                    .size(72.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primaryContainer),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.ModeComment,
+                                    contentDescription = null,
+                                    tint = RoyalBluePrimary,
+                                    modifier = Modifier.size(34.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(18.dp))
                             Text(
-                                text = if (uiState.currentLanguage == AppLanguage.BANGLA) "কোন সক্রিয় চ্যাট নেই" else "No active conversations",
+                                text = if (hasNoConversations) {
+                                    if (uiState.currentLanguage == AppLanguage.BANGLA) "এখনও কোনো কথোপকথন নেই" else "No conversations yet"
+                                } else {
+                                    if (uiState.currentLanguage == AppLanguage.BANGLA) "এই ফিল্টারে কোনো চ্যাট নেই" else "No conversations match this filter"
+                                },
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp,
-                                color = MaterialTheme.colorScheme.onSurface
+                                fontSize = 20.sp,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
                             )
-                            Spacer(modifier = Modifier.height(6.dp))
+                            Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = "Scan a peer's QR invitation or create a pass to start private messaging",
-                                fontSize = 12.sp,
+                                text = if (hasNoConversations) {
+                                    if (uiState.currentLanguage == AppLanguage.BANGLA) {
+                                        "বিশ্বাসের কাউকে সংযুক্ত করে ব্যক্তিগত চ্যাট শুরু করুন।"
+                                    } else {
+                                        "Connect with someone you trust to start a private chat."
+                                    }
+                                } else {
+                                    if (uiState.currentLanguage == AppLanguage.BANGLA) {
+                                        "অন্য ফিল্টার বেছে নিয়ে আপনার চ্যাটগুলো দেখুন।"
+                                    } else {
+                                        "Choose another filter to see your chats."
+                                    }
+                                },
+                                fontSize = 14.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                                lineHeight = 16.sp
+                                lineHeight = 20.sp
                             )
-                            Spacer(modifier = Modifier.height(18.dp))
 
-                            androidx.compose.material3.Button(
-                                onClick = { viewModel.openSearchPeople() },
-                                colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                androidx.compose.material3.Icon(
-                                    imageVector = Icons.Outlined.PersonSearch,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Find People to Chat", fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                            }
-
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                androidx.compose.material3.OutlinedButton(
+                            if (hasNoConversations) {
+                                Spacer(modifier = Modifier.height(20.dp))
+                                androidx.compose.material3.Button(
                                     onClick = { viewModel.openPassScanner() },
-                                    shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier.weight(1f)
+                                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                        containerColor = RoyalBluePrimary,
+                                        contentColor = Color.White
+                                    ),
+                                    shape = RoundedCornerShape(16.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(52.dp)
                                 ) {
-                                    androidx.compose.material3.Icon(
+                                    Icon(
                                         imageVector = Icons.Outlined.QrCodeScanner,
                                         contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
+                                        modifier = Modifier.size(20.dp)
                                     )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Scan QR", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = if (uiState.currentLanguage == AppLanguage.BANGLA) "আমন্ত্রণ স্ক্যান করুন" else "Scan an invite",
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
                                 }
-
+                                Spacer(modifier = Modifier.height(10.dp))
                                 androidx.compose.material3.OutlinedButton(
                                     onClick = { viewModel.openPassGenerator() },
-                                    shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier.weight(1f)
+                                    shape = RoundedCornerShape(16.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(52.dp)
                                 ) {
-                                    androidx.compose.material3.Icon(
+                                    Icon(
                                         imageVector = Icons.Outlined.QrCode,
                                         contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
+                                        modifier = Modifier.size(20.dp)
                                     )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Create Pass", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = if (uiState.currentLanguage == AppLanguage.BANGLA) "আমন্ত্রণ তৈরি করুন" else "Create an invite",
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                                androidx.compose.material3.TextButton(
+                                    onClick = { viewModel.openSearchPeople() },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(48.dp)
+                                ) {
+                                    Text(
+                                        text = if (uiState.currentLanguage == AppLanguage.BANGLA) {
+                                            "Fort ID দিয়ে খুঁজুন (Knock First)"
+                                        } else {
+                                            "Find by Fort ID (Knock First)"
+                                        },
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            } else {
+                                Spacer(modifier = Modifier.height(12.dp))
+                                androidx.compose.material3.TextButton(
+                                    onClick = { viewModel.selectFilter(ChatFilter.ALL) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(48.dp)
+                                ) {
+                                    Text(
+                                        text = if (uiState.currentLanguage == AppLanguage.BANGLA) "সব কথোপকথন দেখুন" else "Show all conversations",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
                                 }
                             }
                         }
