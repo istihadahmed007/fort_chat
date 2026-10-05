@@ -1,7 +1,10 @@
 package com.fort.messenger.ui.screens.chats
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,19 +16,35 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.border
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.outlined.*
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.DoneAll
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.FilterAltOff
+import androidx.compose.material.icons.outlined.LocationOn
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.PersonSearch
+import androidx.compose.material.icons.outlined.PhotoCamera
+import androidx.compose.material.icons.outlined.QrCode
+import androidx.compose.material.icons.outlined.QrCodeScanner
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.Badge
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -34,8 +53,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -43,11 +64,13 @@ import com.fort.messenger.model.ChatConversation
 import com.fort.messenger.ui.components.ChatFilter
 import com.fort.messenger.ui.components.ConnectionCardBadge
 import com.fort.messenger.ui.components.FilterChipBar
+import com.fort.messenger.ui.components.FortChatEmptyHero
+import com.fort.messenger.ui.components.FortChatLogoBadge
 import com.fort.messenger.ui.components.MoodRingBadge
 import com.fort.messenger.ui.components.PassCountdownChip
+import com.fort.messenger.ui.components.PrivateByDefaultBadge
 import com.fort.messenger.ui.components.QuietPresenceBanner
 import com.fort.messenger.ui.components.SovereignCard
-import com.fort.messenger.ui.components.SovereignTopBar
 import com.fort.messenger.ui.theme.EmeraldVerified
 import com.fort.messenger.ui.theme.RoseDestructive
 import com.fort.messenger.ui.theme.RoyalBluePrimary
@@ -58,11 +81,15 @@ import com.fort.messenger.viewmodel.FortMainViewModel
 fun ChatsHomeScreen(
     viewModel: FortMainViewModel,
     onNavigateToChat: (String) -> Unit,
+    onNavigateToYou: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val isDark = isSystemInDarkTheme()
+    val isBangla = uiState.currentLanguage == AppLanguage.BANGLA
     val activeCard = uiState.connectionCards.find { it.id == uiState.activeCardId }
 
+    val hasConversations = uiState.conversations.isNotEmpty()
     val filteredConversations = uiState.conversations.filter { conv ->
         when (uiState.selectedFilter) {
             ChatFilter.ALL -> true
@@ -74,16 +101,78 @@ fun ChatsHomeScreen(
 
     Scaffold(
         topBar = {
-            SovereignTopBar(
-                title = if (uiState.currentLanguage == AppLanguage.BANGLA) "চ্যাটস" else "Chats",
-                subtitle = if (uiState.currentLanguage == AppLanguage.BANGLA) "আপনার ব্যক্তিগত কথোপকথন" else "Your private conversations",
-                activeCard = activeCard,
-                onActiveCardClick = { /* Can switch persona from top bar */ },
-                onScanQrClick = { viewModel.openPassScanner() }
-            )
+            // Fort Chat Top Bar matching reference design
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(
+                        0.5.dp,
+                        if (isDark) Color(0xFF1E2B47) else Color(0xFFE2E8F0)
+                    )
+                    .statusBarsPadding()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(62.dp)
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        FortChatLogoBadge(size = 38.dp)
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "Fort Chat",
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                letterSpacing = (-0.2).sp
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            PrivateByDefaultBadge()
+                        }
+                    }
+
+                    // Profile Circle Icon Button (min 48dp touch target)
+                    IconButton(
+                        onClick = onNavigateToYou,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(if (isDark) Color(0xFF1E293B) else Color(0xFFF1F5F9))
+                                .border(
+                                    0.5.dp,
+                                    if (isDark) Color(0xFF334155) else Color(0xFFCBD5E1),
+                                    CircleShape
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (activeCard != null && activeCard.avatarEmoji.isNotBlank()) {
+                                Text(text = activeCard.avatarEmoji, fontSize = 16.sp)
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Outlined.Person,
+                                    contentDescription = if (isBangla) "প্রোফাইল ও এক্সেস ম্যাপ" else "Profile & Access Map",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         },
         floatingActionButton = {
-            if (uiState.conversations.isNotEmpty()) {
+            // Hide new-chat button when no conversations exist as required by reference design
+            if (hasConversations) {
                 FloatingActionButton(
                     onClick = { viewModel.openNewChatMenu() },
                     containerColor = RoyalBluePrimary,
@@ -95,10 +184,13 @@ fun ChatsHomeScreen(
                         modifier = Modifier.padding(horizontal = 16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(imageVector = Icons.Default.Add, contentDescription = "New chat")
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = if (isBangla) "নতুন চ্যাট" else "New Chat"
+                        )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (uiState.currentLanguage == AppLanguage.BANGLA) "নতুন চ্যাট" else "New chat",
+                            text = if (isBangla) "নতুন চ্যাট" else "New Chat",
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 14.sp
                         )
@@ -115,9 +207,21 @@ fun ChatsHomeScreen(
                 .padding(innerPadding)
                 .padding(horizontal = 16.dp),
             contentPadding = PaddingValues(top = 12.dp, bottom = 80.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Quiet Presence Banner
+            // Page Header: "Your chats"
+            item {
+                Text(
+                    text = if (isBangla) "আপনার চ্যাটসমূহ" else "Your chats",
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    letterSpacing = (-0.4).sp,
+                    modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
+                )
+            }
+
+            // Quiet Presence Control with clear audience and expiry explanation
             item {
                 QuietPresenceBanner(
                     moodState = uiState.moodState,
@@ -126,16 +230,130 @@ fun ChatsHomeScreen(
                 )
             }
 
-            if (uiState.conversations.isNotEmpty()) {
+            // When there are no conversations at all: Hide filters, counts, and FAB. Show clean liquid-glass hero.
+            if (!hasConversations) {
+                item {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 18.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        // Concentric liquid rings with bubbles & shield
+                        FortChatEmptyHero(modifier = Modifier.padding(bottom = 18.dp))
+
+                        Text(
+                            text = if (isBangla) "এখনো কোনো কথোপকথন নেই" else "No conversations yet",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 20.sp,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            textAlign = TextAlign.Center
+                        )
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        Text(
+                            text = if (isBangla)
+                                "একটি গোপন চ্যাট শুরু করতে বিশ্বস্ত কারো সাথে যুক্ত হন।"
+                            else
+                                "Connect with someone you trust to start a private chat.",
+                            fontSize = 13.5.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            lineHeight = 18.sp,
+                            modifier = Modifier.padding(horizontal = 24.dp)
+                        )
+
+                        Spacer(modifier = Modifier.height(24.dp))
+
+                        // Action 1: "Scan an invite" (Royal blue primary pill button, >=48dp touch target)
+                        Button(
+                            onClick = { viewModel.openPassScanner() },
+                            colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
+                            shape = RoundedCornerShape(24.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.QrCodeScanner,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                                tint = Color.White
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (isBangla) "ইনভাইট স্ক্যান করুন" else "Scan an invite",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.White
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Action 2: "Create an invite" (Outlined pill button, >=48dp touch target)
+                        OutlinedButton(
+                            onClick = { viewModel.openPassGenerator() },
+                            shape = RoundedCornerShape(24.dp),
+                            border = BorderStroke(1.2.dp, if (isDark) Color(0xFF3B82F6) else RoyalBluePrimary),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.QrCode,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                                tint = if (isDark) Color(0xFF60A5FA) else RoyalBluePrimary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (isBangla) "ইনভাইট তৈরি করুন" else "Create an invite",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isDark) Color(0xFF60A5FA) else RoyalBluePrimary
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Action 3: "Find by Fort ID (Knock First)" (Outlined pill button, >=48dp touch target)
+                        OutlinedButton(
+                            onClick = { viewModel.openSearchPeople() },
+                            shape = RoundedCornerShape(24.dp),
+                            border = BorderStroke(1.dp, if (isDark) Color(0xFF334155) else Color(0xFFCBD5E1)),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = if (isDark) Color(0xFF94A3B8) else Color(0xFF334155)
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.PersonSearch,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (isBangla) "ফোর্ট আইডি দিয়ে খুঁজুন (নক ফার্স্ট)" else "Find by Fort ID (Knock First)",
+                                fontSize = 13.5.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+            } else {
+                // Conversations exist: Show Filter Chips Bar
                 item {
                     FilterChipBar(
                         selectedFilter = uiState.selectedFilter,
                         onFilterSelected = { viewModel.selectFilter(it) }
                     )
                 }
-            }
 
-            if (filteredConversations.isNotEmpty()) {
+                // Conversation Count Header
                 item {
                     Row(
                         modifier = Modifier
@@ -145,160 +363,73 @@ fun ChatsHomeScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = if (uiState.currentLanguage == AppLanguage.BANGLA) "কথোপকথন" else "Conversations",
+                            text = if (isBangla) "সক্রিয় চ্যাটসমূহ" else "Active Conversations",
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
-                            text = if (uiState.currentLanguage == AppLanguage.BANGLA) {
-                                "${filteredConversations.size}টি কথোপকথন"
-                            } else {
-                                val count = filteredConversations.size
-                                "$count ${if (count == 1) "conversation" else "conversations"}"
-                            },
+                            text = "${filteredConversations.size} ${if (filteredConversations.size == 1) "chat" else "chats"}",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
-            }
 
-            // Conversation Rows
-            if (filteredConversations.isEmpty()) {
-                val hasNoConversations = uiState.conversations.isEmpty()
-                item {
-                    SovereignCard(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = if (hasNoConversations) 12.dp else 16.dp),
-                        shape = RoundedCornerShape(24.dp),
-                        elevation = 2.dp
-                    ) {
-                        Column(
+                // If filter has no matches, show separate filter empty state
+                if (filteredConversations.isEmpty()) {
+                    item {
+                        SovereignCard(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 12.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
+                                .padding(vertical = 16.dp)
                         ) {
-                            Box(
+                            Column(
                                 modifier = Modifier
-                                    .size(72.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.primaryContainer),
-                                contentAlignment = Alignment.Center
+                                    .fillMaxWidth()
+                                    .padding(20.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.ModeComment,
-                                    contentDescription = null,
-                                    tint = RoyalBluePrimary,
-                                    modifier = Modifier.size(34.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(18.dp))
-                            Text(
-                                text = if (hasNoConversations) {
-                                    if (uiState.currentLanguage == AppLanguage.BANGLA) "এখনও কোনো কথোপকথন নেই" else "No conversations yet"
-                                } else {
-                                    if (uiState.currentLanguage == AppLanguage.BANGLA) "এই ফিল্টারে কোনো চ্যাট নেই" else "No conversations match this filter"
-                                },
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 20.sp,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = if (hasNoConversations) {
-                                    if (uiState.currentLanguage == AppLanguage.BANGLA) {
-                                        "বিশ্বাসের কাউকে সংযুক্ত করে ব্যক্তিগত চ্যাট শুরু করুন।"
-                                    } else {
-                                        "Connect with someone you trust to start a private chat."
-                                    }
-                                } else {
-                                    if (uiState.currentLanguage == AppLanguage.BANGLA) {
-                                        "অন্য ফিল্টার বেছে নিয়ে আপনার চ্যাটগুলো দেখুন।"
-                                    } else {
-                                        "Choose another filter to see your chats."
-                                    }
-                                },
-                                fontSize = 14.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                                lineHeight = 20.sp
-                            )
-
-                            if (hasNoConversations) {
-                                Spacer(modifier = Modifier.height(20.dp))
-                                androidx.compose.material3.Button(
-                                    onClick = { viewModel.openPassScanner() },
-                                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                                        containerColor = RoyalBluePrimary,
-                                        contentColor = Color.White
-                                    ),
-                                    shape = RoundedCornerShape(16.dp),
+                                Box(
                                     modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(52.dp)
+                                        .size(48.dp)
+                                        .clip(CircleShape)
+                                        .background(if (isDark) Color(0xFF1E293B) else Color(0xFFEFF6FF)),
+                                    contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Outlined.QrCodeScanner,
+                                        imageVector = Icons.Outlined.FilterAltOff,
                                         contentDescription = null,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = if (uiState.currentLanguage == AppLanguage.BANGLA) "আমন্ত্রণ স্ক্যান করুন" else "Scan an invite",
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.SemiBold
+                                        tint = RoyalBluePrimary,
+                                        modifier = Modifier.size(24.dp)
                                     )
                                 }
-                                Spacer(modifier = Modifier.height(10.dp))
-                                androidx.compose.material3.OutlinedButton(
-                                    onClick = { viewModel.openPassGenerator() },
-                                    shape = RoundedCornerShape(16.dp),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(52.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.QrCode,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = if (uiState.currentLanguage == AppLanguage.BANGLA) "আমন্ত্রণ তৈরি করুন" else "Create an invite",
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                }
-                                androidx.compose.material3.TextButton(
-                                    onClick = { viewModel.openSearchPeople() },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(48.dp)
-                                ) {
-                                    Text(
-                                        text = if (uiState.currentLanguage == AppLanguage.BANGLA) {
-                                            "Fort ID দিয়ে খুঁজুন (Knock First)"
-                                        } else {
-                                            "Find by Fort ID (Knock First)"
-                                        },
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                }
-                            } else {
                                 Spacer(modifier = Modifier.height(12.dp))
-                                androidx.compose.material3.TextButton(
+                                Text(
+                                    text = if (isBangla) "কোনো মেলানো কথোপকথন নেই" else "No matching conversations",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = if (isBangla)
+                                        "আপনার ফিল্টারের সাথে কোনো চ্যাট মেলেনি।"
+                                    else
+                                        "No conversations match your selected filter.",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Button(
                                     onClick = { viewModel.selectFilter(ChatFilter.ALL) },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(48.dp)
+                                    colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
+                                    shape = RoundedCornerShape(20.dp),
+                                    modifier = Modifier.height(48.dp)
                                 ) {
                                     Text(
-                                        text = if (uiState.currentLanguage == AppLanguage.BANGLA) "সব কথোপকথন দেখুন" else "Show all conversations",
+                                        text = if (isBangla) "সকল কথোপকথন দেখুন" else "Show all conversations",
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.SemiBold
                                     )
@@ -306,16 +437,16 @@ fun ChatsHomeScreen(
                             }
                         }
                     }
-                }
-            } else {
-                items(filteredConversations, key = { it.id }) { conversation ->
-                    ConversationRowItem(
-                        conversation = conversation,
-                        onClick = {
-                            viewModel.openChat(conversation.id)
-                            onNavigateToChat(conversation.id)
-                        }
-                    )
+                } else {
+                    items(filteredConversations, key = { it.id }) { conversation ->
+                        ConversationRowItem(
+                            conversation = conversation,
+                            onClick = {
+                                viewModel.openChat(conversation.id)
+                                onNavigateToChat(conversation.id)
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -328,12 +459,17 @@ fun ConversationRowItem(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val isDark = isSystemInDarkTheme()
+
     SovereignCard(
         onClick = onClick,
-        modifier = modifier.fillMaxWidth()
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp)
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Avatar with Mood Ring micro-badge anchored at bottom-right
@@ -344,7 +480,13 @@ fun ConversationRowItem(
                     modifier = Modifier
                         .size(46.dp)
                         .clip(CircleShape)
-                        .background(if (conversation.isRoom) Color(0xFFE0E7FF) else Color(0xFFEFF4FF)),
+                        .background(
+                            if (conversation.isRoom) {
+                                if (isDark) Color(0xFF1E2B47) else Color(0xFFE0E7FF)
+                            } else {
+                                if (isDark) Color(0xFF16233B) else Color(0xFFEFF4FF)
+                            }
+                        ),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
@@ -388,11 +530,20 @@ fun ConversationRowItem(
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(6.dp))
-                                    .background(Color(0xFFEFF6FF))
-                                    .border(0.5.dp, Color(0xFF93C5FD), RoundedCornerShape(6.dp))
+                                    .background(if (isDark) Color(0xFF1E3A5F) else Color(0xFFEFF6FF))
+                                    .border(
+                                        0.5.dp,
+                                        if (isDark) Color(0xFF3B82F6) else Color(0xFF93C5FD),
+                                        RoundedCornerShape(6.dp)
+                                    )
                                     .padding(horizontal = 5.dp, vertical = 1.dp)
                             ) {
-                                Text("ROOM", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = RoyalBluePrimary)
+                                Text(
+                                    "ROOM",
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = RoyalBluePrimary
+                                )
                             }
                         } else {
                             ConnectionCardBadge(cardType = conversation.cardType)
@@ -405,7 +556,7 @@ fun ConversationRowItem(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(3.dp))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -513,7 +664,7 @@ fun ConversationRowItem(
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(Color(0xFFF1F5F9))
+                                    .background(if (isDark) Color(0xFF1E293B) else Color(0xFFF1F5F9))
                                     .padding(horizontal = 6.dp, vertical = 2.dp)
                             ) {
                                 Text(

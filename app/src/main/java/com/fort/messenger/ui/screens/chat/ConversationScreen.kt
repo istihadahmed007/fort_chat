@@ -4,13 +4,16 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.outlined.*
@@ -19,7 +22,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalContext
@@ -29,8 +35,11 @@ import com.fort.messenger.model.CallType
 import com.fort.messenger.model.ChatMessage
 import com.fort.messenger.model.LocationPin
 import com.fort.messenger.ui.components.ConnectionCardBadge
+import com.fort.messenger.ui.components.FortChatLogoBadge
+import com.fort.messenger.ui.components.FortPrivateConversationBanner
 import com.fort.messenger.ui.components.MoodRingBadge
 import com.fort.messenger.ui.components.PassCountdownChip
+import com.fort.messenger.ui.components.PrivateByDefaultBadge
 import com.fort.messenger.ui.modals.PrivacyCheckDialog
 import com.fort.messenger.ui.modals.ShareCheckModal
 import com.fort.messenger.ui.theme.EmeraldVerified
@@ -38,6 +47,7 @@ import com.fort.messenger.ui.theme.IceBlueBorder
 import com.fort.messenger.ui.theme.IceBlueTint
 import com.fort.messenger.ui.theme.RoseDestructive
 import com.fort.messenger.ui.theme.RoyalBluePrimary
+import com.fort.messenger.viewmodel.AppLanguage
 import com.fort.messenger.viewmodel.FortMainViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -49,6 +59,8 @@ fun ConversationScreen(
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val isDark = isSystemInDarkTheme()
+    val isBangla = uiState.currentLanguage == AppLanguage.BANGLA
     val conversation = uiState.conversations.find { it.id == conversationId }
     var inputText by remember(conversationId) { mutableStateOf(viewModel.getDraft(conversationId)) }
     var isSearchActive by remember { mutableStateOf(false) }
@@ -57,6 +69,8 @@ fun ConversationScreen(
     var showEditDialog by remember { mutableStateOf(false) }
     var editingText by remember { mutableStateOf("") }
     var showAttachmentMenu by remember { mutableStateOf(false) }
+    var showEmojiPicker by remember { mutableStateOf(false) }
+    var showCallMenu by remember { mutableStateOf(false) }
 
     // Auto mark as read on entering chat
     LaunchedEffect(conversationId) {
@@ -72,7 +86,7 @@ fun ConversationScreen(
 
     if (conversation == null) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("Conversation not found")
+            Text(if (isBangla) "কথোপকথনটি পাওয়া যায়নি" else "Conversation not found")
         }
         return
     }
@@ -90,7 +104,10 @@ fun ConversationScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surface)
-                    .border(0.5.dp, MaterialTheme.colorScheme.outline)
+                    .border(
+                        0.5.dp,
+                        if (isDark) Color(0xFF1E2B47) else Color(0xFFE2E8F0)
+                    )
                     .statusBarsPadding()
             ) {
                 Row(
@@ -100,21 +117,25 @@ fun ConversationScreen(
                         .padding(horizontal = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(onClick = onNavigateBack) {
+                    IconButton(
+                        onClick = onNavigateBack,
+                        modifier = Modifier.size(48.dp)
+                    ) {
                         Icon(
-                            imageVector = Icons.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = MaterialTheme.colorScheme.onSurface
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = if (isBangla) "ফিরে যান" else "Back",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(22.dp)
                         )
                     }
 
-                    // Avatar with Mood Ring
+                    // Avatar / Fort Logo Badge matching reference
                     Box(modifier = Modifier.size(42.dp)) {
                         Box(
                             modifier = Modifier
                                 .size(38.dp)
                                 .clip(CircleShape)
-                                .background(Color(0xFFEFF6FF)),
+                                .background(if (isDark) Color(0xFF1E2B47) else Color(0xFFEFF6FF)),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(text = conversation.avatarEmoji, fontSize = 20.sp)
@@ -132,69 +153,97 @@ fun ConversationScreen(
                     Column(modifier = Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = conversation.participantName,
+                                text = if (conversation.isRoom) conversation.participantName else (if (isBangla) "গোপন চ্যাট" else "Private chat"),
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            ConnectionCardBadge(cardType = conversation.cardType)
+                            if (conversation.isRoom) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                ConnectionCardBadge(cardType = conversation.cardType)
+                            }
                         }
-                        Text(
-                            text = if (conversation.isTyping || uiState.isPeerTyping) "typing..." else conversation.handle,
-                            fontSize = 11.sp,
-                            fontWeight = if (conversation.isTyping || uiState.isPeerTyping) FontWeight.Bold else FontWeight.Normal,
-                            color = if (conversation.isTyping || uiState.isPeerTyping) RoyalBluePrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        PrivateByDefaultBadge()
                     }
 
-                    // Audio & Video Call Buttons (for direct 1-to-1 contacts)
+                    // Audio & Video Call Actions - Limited strictly to accepted contacts
                     if (!conversation.isRoom) {
-                        IconButton(onClick = {
-                            val peerUserId = conversationId.removePrefix("conv_")
-                            viewModel.startCall(peerUserId, conversation.participantName, CallType.AUDIO)
-                        }) {
-                            Icon(
-                                imageVector = Icons.Outlined.Call,
-                                contentDescription = "Audio Call",
-                                tint = RoyalBluePrimary,
-                                modifier = Modifier.size(22.dp)
-                            )
-                        }
+                        Box {
+                            IconButton(
+                                onClick = { showCallMenu = true },
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(if (isDark) Color(0xFF1E2B47) else Color(0xFFEFF6FF)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Call,
+                                        contentDescription = if (isBangla) "কল করুন" else "Call Contact",
+                                        tint = RoyalBluePrimary,
+                                        modifier = Modifier.size(19.dp)
+                                    )
+                                }
+                            }
 
-                        IconButton(onClick = {
-                            val peerUserId = conversationId.removePrefix("conv_")
-                            viewModel.startCall(peerUserId, conversation.participantName, CallType.VIDEO)
-                        }) {
-                            Icon(
-                                imageVector = Icons.Outlined.Videocam,
-                                contentDescription = "Video Call",
-                                tint = RoyalBluePrimary,
-                                modifier = Modifier.size(22.dp)
-                            )
+                            DropdownMenu(
+                                expanded = showCallMenu,
+                                onDismissRequest = { showCallMenu = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text(if (isBangla) "অডিও কল" else "Audio Call") },
+                                    leadingIcon = { Icon(Icons.Outlined.Call, contentDescription = null, tint = RoyalBluePrimary) },
+                                    onClick = {
+                                        showCallMenu = false
+                                        val peerUserId = conversationId.removePrefix("conv_")
+                                        viewModel.startCall(peerUserId, conversation.participantName, CallType.AUDIO)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (isBangla) "ভিডিও কল" else "Video Call") },
+                                    leadingIcon = { Icon(Icons.Outlined.Videocam, contentDescription = null, tint = RoyalBluePrimary) },
+                                    onClick = {
+                                        showCallMenu = false
+                                        val peerUserId = conversationId.removePrefix("conv_")
+                                        viewModel.startCall(peerUserId, conversation.participantName, CallType.VIDEO)
+                                    }
+                                )
+                            }
                         }
                     }
 
                     // In-chat Search Toggle Button
-                    IconButton(onClick = {
-                        isSearchActive = !isSearchActive
-                        if (!isSearchActive) searchQuery = ""
-                    }) {
+                    IconButton(
+                        onClick = {
+                            isSearchActive = !isSearchActive
+                            if (!isSearchActive) searchQuery = ""
+                        },
+                        modifier = Modifier.size(40.dp)
+                    ) {
                         Icon(
                             imageVector = Icons.Outlined.Search,
-                            contentDescription = "Search Messages",
+                            contentDescription = if (isBangla) "বার্তা অনুসন্ধান" else "Search Messages",
                             tint = if (isSearchActive) RoyalBluePrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(22.dp)
+                            modifier = Modifier.size(20.dp)
                         )
                     }
 
                     // Privacy Check Button
-                    IconButton(onClick = { viewModel.openPrivacyCheck() }) {
+                    IconButton(
+                        onClick = { viewModel.openPrivacyCheck() },
+                        modifier = Modifier.size(40.dp)
+                    ) {
                         Icon(
                             imageVector = Icons.Outlined.Shield,
-                            contentDescription = "Privacy Check",
+                            contentDescription = if (isBangla) "গোপনীয়তা চেক" else "Privacy Check",
                             tint = RoyalBluePrimary,
-                            modifier = Modifier.size(22.dp)
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
@@ -267,7 +316,10 @@ fun ConversationScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surface)
-                    .border(0.5.dp, MaterialTheme.colorScheme.outline)
+                    .border(
+                        0.5.dp,
+                        if (isDark) Color(0xFF1E2B47) else Color(0xFFE2E8F0)
+                    )
                     .imePadding()
                     .navigationBarsPadding()
             ) {
@@ -278,9 +330,9 @@ fun ConversationScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(Color(0xFFF1F5F9))
-                                .border(width = 0.5.dp, color = Color(0xFFCBD5E1))
-                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                                .background(if (isDark) Color(0xFF1E293B) else Color(0xFFF1F5F9))
+                                .border(width = 0.5.dp, color = if (isDark) Color(0xFF334155) else Color(0xFFCBD5E1))
+                                .padding(horizontal = 14.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
@@ -294,7 +346,7 @@ fun ConversationScreen(
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Column {
                                     Text(
-                                        text = "Replying to ${rep.senderName}",
+                                        text = if (isBangla) "${rep.senderName}-কে উত্তর দিচ্ছেন" else "Replying to ${rep.senderName}",
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = RoyalBluePrimary
@@ -319,105 +371,197 @@ fun ConversationScreen(
                     }
                 }
 
-                // Message Input Row
-                Row(
+                // Quick Emoji Reactions Row
+                AnimatedVisibility(visible = showEmojiPicker) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(if (isDark) Color(0xFF131D31) else Color(0xFFEFF6FF))
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        listOf("❤️", "👍", "😂", "🔥", "🤍", "🛡️", "👋", "✨").forEach { emoji ->
+                            Text(
+                                text = emoji,
+                                fontSize = 22.sp,
+                                modifier = Modifier
+                                    .clickable {
+                                        inputText += emoji
+                                        viewModel.setDraft(conversationId, inputText)
+                                        viewModel.onUserTyping(conversationId, true)
+                                    }
+                                    .padding(4.dp)
+                            )
+                        }
+                    }
+                }
+
+                // Message Input Row matching Screen 3 (Pill Bar)
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
                 ) {
-                    // Attachment button
-                    IconButton(
-                        onClick = { showAttachmentMenu = true },
-                        modifier = Modifier.size(40.dp)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp)
+                            .shadow(elevation = 2.dp, shape = RoundedCornerShape(26.dp), spotColor = Color(0x141E40AF))
+                            .clip(RoundedCornerShape(26.dp))
+                            .background(if (isDark) Color(0xFF131D31) else Color.White)
+                            .border(
+                                0.5.dp,
+                                if (isDark) Color(0xFF1E3A5F) else Color(0xFFDBEAFE),
+                                RoundedCornerShape(26.dp)
+                            )
+                            .padding(horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = Icons.Outlined.AttachFile,
-                            contentDescription = "Attach Media or File",
-                            tint = RoyalBluePrimary
-                        )
-                    }
+                        // (+) Attachment button (>=48dp touch target)
+                        Box {
+                            IconButton(
+                                onClick = { showAttachmentMenu = true },
+                                modifier = Modifier.size(46.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(CircleShape)
+                                        .background(if (isDark) Color(0xFF1E293B) else Color(0xFFF1F5F9)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Add,
+                                        contentDescription = if (isBangla) "মিডিয়া বা ফাইল যুক্ত করুন" else "Attach Media or File",
+                                        tint = if (isDark) Color(0xFF94A3B8) else Color(0xFF475569),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
 
-                    DropdownMenu(
-                        expanded = showAttachmentMenu,
-                        onDismissRequest = { showAttachmentMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Sanitized Camera Photo (EXIF Scrubbed)") },
-                            leadingIcon = { Icon(Icons.Outlined.PhotoCamera, contentDescription = null, tint = RoyalBluePrimary) },
-                            onClick = {
-                                showAttachmentMenu = false
-                                viewModel.openShareCheck()
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Share Private Location (Pin / Live)") },
-                            leadingIcon = { Icon(Icons.Outlined.LocationOn, contentDescription = null, tint = RoyalBluePrimary) },
-                            onClick = {
-                                showAttachmentMenu = false
-                                viewModel.openLocationShareModal()
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Send File / Document") },
-                            leadingIcon = { Icon(Icons.Outlined.Description, contentDescription = null, tint = RoyalBluePrimary) },
-                            onClick = {
-                                showAttachmentMenu = false
-                                viewModel.sendMessage(
-                                    text = "📄 sovereign_enclave_manifest.pdf",
-                                    attachmentUri = "content://fort/manifest.pdf",
-                                    attachmentType = "FILE",
-                                    attachmentName = "sovereign_enclave_manifest.pdf",
-                                    attachmentSize = 48200L
+                            DropdownMenu(
+                                expanded = showAttachmentMenu,
+                                onDismissRequest = { showAttachmentMenu = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text(if (isBangla) "ক্যামেরা ছবি (EXIF স্ক্রাবড)" else "Sanitized Camera Photo (EXIF Scrubbed)") },
+                                    leadingIcon = { Icon(Icons.Outlined.PhotoCamera, contentDescription = null, tint = RoyalBluePrimary) },
+                                    onClick = {
+                                        showAttachmentMenu = false
+                                        viewModel.openShareCheck()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (isBangla) "ব্যক্তিগত অবস্থান শেয়ার (পিন / লাইভ)" else "Share Private Location (Pin / Live)") },
+                                    leadingIcon = { Icon(Icons.Outlined.LocationOn, contentDescription = null, tint = RoyalBluePrimary) },
+                                    onClick = {
+                                        showAttachmentMenu = false
+                                        viewModel.openLocationShareModal()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (isBangla) "ফাইল / ডকুমেন্ট পাঠান" else "Send File / Document") },
+                                    leadingIcon = { Icon(Icons.Outlined.Description, contentDescription = null, tint = RoyalBluePrimary) },
+                                    onClick = {
+                                        showAttachmentMenu = false
+                                        viewModel.sendMessage(
+                                            text = "📄 sovereign_enclave_manifest.pdf",
+                                            attachmentUri = "content://fort/manifest.pdf",
+                                            attachmentType = "FILE",
+                                            attachmentName = "sovereign_enclave_manifest.pdf",
+                                            attachmentSize = 48200L
+                                        )
+                                    }
                                 )
                             }
-                        )
-                    }
+                        }
 
-                    Spacer(modifier = Modifier.width(4.dp))
-
-                    OutlinedTextField(
-                        value = inputText,
-                        onValueChange = {
-                            inputText = it
-                            viewModel.setDraft(conversationId, it)
-                            viewModel.onUserTyping(conversationId, it.isNotBlank())
-                        },
-                        placeholder = {
-                            Text("Encrypted message...", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        },
-                        shape = RoundedCornerShape(20.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = RoyalBluePrimary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                        ),
-                        modifier = Modifier.weight(1f),
-                        singleLine = true
-                    )
-
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    IconButton(
-                        onClick = {
-                            if (inputText.isNotBlank()) {
-                                val textToSend = inputText
-                                inputText = ""
-                                viewModel.setDraft(conversationId, "")
-                                viewModel.onUserTyping(conversationId, false)
-                                viewModel.sendMessage(textToSend)
+                        // Message Text Field
+                        BasicTextField(
+                            value = inputText,
+                            onValueChange = {
+                                inputText = it
+                                viewModel.setDraft(conversationId, it)
+                                viewModel.onUserTyping(conversationId, it.isNotBlank())
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(horizontal = 8.dp),
+                            textStyle = TextStyle(
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            ),
+                            singleLine = false,
+                            maxLines = 4,
+                            cursorBrush = SolidColor(RoyalBluePrimary),
+                            decorationBox = { innerTextField ->
+                                if (inputText.isEmpty()) {
+                                    Text(
+                                        text = if (isBangla) "বার্তা লিখুন..." else "Message...",
+                                        fontSize = 14.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                innerTextField()
                             }
-                        },
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .background(RoyalBluePrimary)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Send,
-                            contentDescription = "Send",
-                            tint = Color.White,
-                            modifier = Modifier.size(18.dp)
                         )
+
+                        // Smiley Emoji Button (>=48dp touch target)
+                        IconButton(
+                            onClick = { showEmojiPicker = !showEmojiPicker },
+                            modifier = Modifier.size(46.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.SentimentSatisfied,
+                                contentDescription = if (isBangla) "ইমোজি" else "Emoji",
+                                tint = if (showEmojiPicker) RoyalBluePrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        // Mic / Send Button (>=48dp touch target)
+                        if (inputText.isNotBlank()) {
+                            IconButton(
+                                onClick = {
+                                    val textToSend = inputText
+                                    inputText = ""
+                                    viewModel.setDraft(conversationId, "")
+                                    viewModel.onUserTyping(conversationId, false)
+                                    viewModel.sendMessage(textToSend)
+                                },
+                                modifier = Modifier.size(46.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .clip(CircleShape)
+                                        .background(RoyalBluePrimary),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Send,
+                                        contentDescription = if (isBangla) "পাঠান" else "Send",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        } else {
+                            IconButton(
+                                onClick = {
+                                    viewModel.sendMessage("🎙️ [Voice note: 0:04]")
+                                },
+                                modifier = Modifier.size(46.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Mic,
+                                    contentDescription = if (isBangla) "ভয়েস রেকর্ড" else "Voice Note",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -539,9 +683,20 @@ fun ConversationScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(horizontal = 16.dp),
-                contentPadding = PaddingValues(vertical = 12.dp),
+                contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                // Central Privacy Shield Banner matching reference Screen 3
+                item {
+                    FortPrivateConversationBanner(
+                        title = if (isBangla) "আপনার কথোপকথনটি গোপনীয়" else "Your conversation is private",
+                        description = if (isBangla)
+                            "বার্তাগুলো এন্ড-টু-এন্ড এনক্রিপ্টেড এবং কেবল আপনি ও অপর ব্যক্তির কাছে দৃশ্যমান।"
+                        else
+                            "Messages are end-to-end encrypted and visible only to you and the other person."
+                    )
+                }
+
                 items(displayMessages, key = { it.id }) { message ->
                     ChatMessageBubble(
                         message = message,

@@ -105,14 +105,18 @@ fun FortNavGraph(
                 FortDestination.CHATS -> {
                     ChatsHomeScreen(
                         viewModel = viewModel,
-                        onNavigateToChat = { chatId -> viewModel.openChat(chatId) }
+                        onNavigateToChat = { chatId -> viewModel.openChat(chatId) },
+                        onNavigateToYou = { currentDestination = FortDestination.YOU }
                     )
                 }
                 FortDestination.CIRCLES -> {
                     CirclesRoomsScreen(viewModel = viewModel)
                 }
                 FortDestination.REQUESTS -> {
-                    KnockFirstRequestsScreen(viewModel = viewModel)
+                    KnockFirstRequestsScreen(
+                        viewModel = viewModel,
+                        onNavigateBack = { currentDestination = FortDestination.CHATS }
+                    )
                 }
                 FortDestination.YOU -> {
                     YouAccessMapScreen(viewModel = viewModel)

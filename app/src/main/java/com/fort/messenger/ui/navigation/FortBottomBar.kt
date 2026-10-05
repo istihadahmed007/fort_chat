@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,7 +15,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
@@ -25,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -40,13 +44,18 @@ fun FortBottomBar(
     language: AppLanguage = AppLanguage.ENGLISH,
     modifier: Modifier = Modifier
 ) {
+    val isDark = isSystemInDarkTheme()
+    val barBg = if (isDark) Color(0xEB0D1527) else Color(0xF7FFFFFF)
+    val barBorder = if (isDark) Color(0xFF1E2B47) else Color(0xFFE2E8F0)
+
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface)
+            .shadow(elevation = 6.dp, spotColor = Color(0x1A1E40AF))
+            .background(barBg)
             .border(
                 width = 0.5.dp,
-                color = MaterialTheme.colorScheme.outline
+                color = barBorder
             )
             .navigationBarsPadding()
     ) {
@@ -68,7 +77,7 @@ fun FortBottomBar(
                     modifier = Modifier
                         .weight(1f)
                         .height(56.dp)
-                        .clip(CircleShape)
+                        .clip(RoundedCornerShape(12.dp))
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
@@ -97,7 +106,7 @@ fun FortBottomBar(
                                     imageVector = icon,
                                     contentDescription = label,
                                     tint = contentColor,
-                                    modifier = Modifier.size(24.dp)
+                                    modifier = Modifier.size(22.dp)
                                 )
                             }
                         } else {
@@ -105,7 +114,7 @@ fun FortBottomBar(
                                 imageVector = icon,
                                 contentDescription = label,
                                 tint = contentColor,
-                                modifier = Modifier.size(24.dp)
+                                modifier = Modifier.size(22.dp)
                             )
                         }
 
@@ -117,9 +126,24 @@ fun FortBottomBar(
                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                             color = contentColor
                         )
+
+                        // Active Indicator underline matching reference design
+                        if (isSelected) {
+                            Spacer(modifier = Modifier.height(3.dp))
+                            Box(
+                                modifier = Modifier
+                                    .width(20.dp)
+                                    .height(2.5.dp)
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(RoyalBluePrimary)
+                            )
+                        } else {
+                            Spacer(modifier = Modifier.height(5.5.dp))
+                        }
                     }
                 }
             }
         }
     }
 }
+

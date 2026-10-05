@@ -50,3 +50,10 @@ val IceGlassDark = Color(0xEB111B2E)
 val IceGlassBorderLight = Color(0x80BFDBFE)
 val IceGlassBorderDark = Color(0x4D60A5FA)
 val LiquidGlassHighlight = Color(0x40FFFFFF)
+
+// Private by Default Badge Tokens
+val PrivateByDefaultBgLight = Color(0xFFE6F4EA)
+val PrivateByDefaultTextLight = Color(0xFF137333)
+val PrivateByDefaultBgDark = Color(0xFF0F3822)
+val PrivateByDefaultTextDark = Color(0xFF81C995)
+
