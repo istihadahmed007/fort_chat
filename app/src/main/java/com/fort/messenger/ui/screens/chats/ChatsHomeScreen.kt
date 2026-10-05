@@ -106,25 +106,6 @@ fun ChatsHomeScreen(
                 }
             }
         },
-        containerColor = RoyalBluePrimary,
-                contentColor = Color.White,
-                shape = CircleShape,
-                modifier = Modifier.padding(bottom = 12.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(imageVector = Icons.Default.Add, contentDescription = "New Chat")
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = if (uiState.currentLanguage == AppLanguage.BANGLA) "+ নতুন চ্যাট" else "+ New Chat",
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 14.sp
-                    )
-                }
-            }
-        },
         containerColor = MaterialTheme.colorScheme.background,
         modifier = modifier
     ) { innerPadding ->
