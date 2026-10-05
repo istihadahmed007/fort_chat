@@ -254,17 +254,49 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
         Unit
     }
 
-    override suspend fun claimPass(token: String, claimantUserId: String): Result<RemotePassRecord> = capture {
+    override suspend fun claimPass(token: String, claimantUserId: String, passId: String?): Result<RemotePassRecord> = capture {
         requireCaller(claimantUserId)
-        val query = firestore.collection("contact_passes")
-            .whereEqualTo("token", token.trim())
-            .limit(1)
-            .get()
-            .await()
-        val reference = query.documents.firstOrNull()?.reference
-            ?: throw IllegalArgumentException("Pass not found. Check the invitation and try again.")
+        val cleanToken = token.trim().uppercase()
+        val tokenVariants = listOf(
+            cleanToken,
+            token.trim(),
+            cleanToken.removePrefix("PASS-"),
+            if (!cleanToken.startsWith("PASS-")) "PASS-$cleanToken" else cleanToken
+        ).distinct()
+
+        var reference = if (!passId.isNullOrBlank()) {
+            val doc = firestore.collection("contact_passes").document(passId).get().await()
+            if (doc.exists()) doc.reference else null
+        } else null
+
+        if (reference == null) {
+            for (t in tokenVariants) {
+                val query = firestore.collection("contact_passes")
+                    .whereEqualTo("token", t)
+                    .limit(1)
+                    .get()
+                    .await()
+                val found = query.documents.firstOrNull()?.reference
+                if (found != null) {
+                    reference = found
+                    break
+                }
+            }
+        }
+
+        if (reference == null) {
+            // Also check by passId equality in field
+            val queryByPassId = firestore.collection("contact_passes")
+                .whereEqualTo("passId", token.trim())
+                .limit(1)
+                .get()
+                .await()
+            reference = queryByPassId.documents.firstOrNull()?.reference
+        }
+
+        val passRef = reference ?: throw IllegalArgumentException("Pass not found. Check the invitation and try again.")
         firestore.runTransaction { transaction ->
-            val snapshot = transaction.get(reference)
+            val snapshot = transaction.get(passRef)
             val pass = snapshot.toPassRecord()
             val now = System.currentTimeMillis()
             if (pass.isRevoked) throw SecurityException("This pass has been revoked.")
@@ -274,7 +306,7 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
                 throw SecurityException("This pass is already connected to another account.")
             }
             transaction.update(
-                reference,
+                passRef,
                 mapOf("isClaimed" to true, "claimantUserId" to claimantUserId)
             )
             pass.copy(isClaimed = true, claimantUserId = claimantUserId)
@@ -473,11 +505,20 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
             }
             SearchMode.FORT_ID -> {
                 val cleanFortId = if (trimmed.startsWith("@")) trimmed else "@$trimmed"
-                val snapshot = firestore.collection("users")
+                val baseFortId = cleanFortId.substringBefore(".").lowercase()
+                var snapshot = firestore.collection("users")
                     .whereEqualTo("fortId", cleanFortId.lowercase())
                     .limit(1)
                     .get()
                     .await()
+
+                if (snapshot.isEmpty) {
+                    snapshot = firestore.collection("users")
+                        .whereEqualTo("fortId", "$baseFortId.fort")
+                        .limit(1)
+                        .get()
+                        .await()
+                }
 
                 val doc = snapshot.documents.firstOrNull() ?: firestore.collection("users").document(trimmed).get().await()
                 if (!doc.exists()) emptyList()
@@ -531,6 +572,62 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
                 }
             }
         }
+    }
+
+    override suspend fun fetchUserProfile(userId: String): Result<UserSearchResult?> = capture {
+        val doc = firestore.collection("users").document(userId).get().await()
+        if (!doc.exists()) return@capture null
+        val dName = doc.getString("displayName") ?: "Sovereign User"
+        val fortId = doc.getString("fortId") ?: "@${dName.lowercase().replace(" ", "")}.fort"
+        UserSearchResult(
+            userId = userId,
+            displayName = dName,
+            fortId = fortId,
+            avatarEmoji = "🛡️",
+            isExistingConnection = false,
+            hasVerifiedPhone = doc.getString("phoneNumber") != null
+        )
+    }
+
+    override suspend fun setTypingStatus(userId: String, recipientUserId: String, isTyping: Boolean): Result<Unit> = capture {
+        requireCaller(userId)
+        val presenceRef = firestore.collection("users").document(userId)
+            .collection("presence").document("typing")
+        val data = mapOf(
+            "recipientUserId" to recipientUserId,
+            "isTyping" to isTyping,
+            "updatedAt" to System.currentTimeMillis()
+        )
+        presenceRef.set(data, SetOptions.merge()).await()
+        Unit
+    }
+
+    override fun listenToTypingStatus(recipientUserId: String, senderUserId: String): Flow<Boolean> = callbackFlow {
+        val presenceRef = firestore.collection("users").document(senderUserId)
+            .collection("presence").document("typing")
+        val registration = presenceRef.addSnapshotListener { snapshot, error ->
+            if (error != null || snapshot == null || !snapshot.exists()) {
+                trySend(false)
+                return@addSnapshotListener
+            }
+            val target = snapshot.getString("recipientUserId")
+            val isTyping = snapshot.getBoolean("isTyping") ?: false
+            val updatedAt = snapshot.getLong("updatedAt") ?: 0L
+            val isRecent = (System.currentTimeMillis() - updatedAt) < 5000L
+            trySend(target == recipientUserId && isTyping && isRecent)
+        }
+        awaitClose { registration.remove() }
+    }
+
+    override suspend fun updateDeliveryStatus(messageId: String, status: String, recipientUserId: String): Result<Unit> = capture {
+        requireCaller(recipientUserId)
+        val msgRef = firestore.collection("messages").document(messageId)
+        val updateMap = mutableMapOf<String, Any>("deliveryStatus" to status)
+        if (status == "READ") {
+            updateMap["readAt"] = System.currentTimeMillis()
+        }
+        msgRef.update(updateMap).await()
+        Unit
     }
 
     override suspend fun updateUserDiscoveryPrivacy(

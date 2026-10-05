@@ -18,11 +18,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.border
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.outlined.PersonSearch
-import androidx.compose.material.icons.outlined.QrCode
-import androidx.compose.material.icons.outlined.QrCodeScanner
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.Badge
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -49,6 +48,8 @@ import com.fort.messenger.ui.components.PassCountdownChip
 import com.fort.messenger.ui.components.QuietPresenceBanner
 import com.fort.messenger.ui.components.SovereignCard
 import com.fort.messenger.ui.components.SovereignTopBar
+import com.fort.messenger.ui.theme.EmeraldVerified
+import com.fort.messenger.ui.theme.RoseDestructive
 import com.fort.messenger.ui.theme.RoyalBluePrimary
 import com.fort.messenger.viewmodel.AppLanguage
 import com.fort.messenger.viewmodel.FortMainViewModel
@@ -274,7 +275,7 @@ fun ConversationRowItem(
                     modifier = Modifier
                         .size(46.dp)
                         .clip(CircleShape)
-                        .background(Color(0xFFEFF4FF)),
+                        .background(if (conversation.isRoom) Color(0xFFE0E7FF) else Color(0xFFEFF4FF)),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
@@ -314,7 +315,19 @@ fun ConversationRowItem(
                             overflow = TextOverflow.Ellipsis
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        ConnectionCardBadge(cardType = conversation.cardType)
+                        if (conversation.isRoom) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color(0xFFEFF6FF))
+                                    .border(0.5.dp, Color(0xFF93C5FD), RoundedCornerShape(6.dp))
+                                    .padding(horizontal = 5.dp, vertical = 1.dp)
+                            ) {
+                                Text("ROOM", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = RoyalBluePrimary)
+                            }
+                        } else {
+                            ConnectionCardBadge(cardType = conversation.cardType)
+                        }
                     }
                     Text(
                         text = conversation.lastMessageTime,
@@ -330,22 +343,122 @@ fun ConversationRowItem(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = conversation.lastMessage,
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.weight(1f)
-                    )
+                    ) {
+                        if (conversation.isTyping) {
+                            Icon(
+                                imageVector = Icons.Outlined.Edit,
+                                contentDescription = null,
+                                tint = RoyalBluePrimary,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "typing...",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                                color = RoyalBluePrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        } else {
+                            // Delivery status tick if last message was sent by me
+                            if (conversation.lastMessageIsMine) {
+                                when (conversation.lastMessageDeliveryStatus) {
+                                    "PENDING" -> Icon(
+                                        imageVector = Icons.Outlined.Schedule,
+                                        contentDescription = "Queued",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    "SENT" -> Icon(
+                                        imageVector = Icons.Outlined.Check,
+                                        contentDescription = "Sent",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    "DELIVERED" -> Icon(
+                                        imageVector = Icons.Outlined.DoneAll,
+                                        contentDescription = "Delivered",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    "READ" -> Icon(
+                                        imageVector = Icons.Outlined.DoneAll,
+                                        contentDescription = "Read",
+                                        tint = EmeraldVerified,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    else -> Icon(
+                                        imageVector = Icons.Outlined.ErrorOutline,
+                                        contentDescription = "Failed",
+                                        tint = RoseDestructive,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(4.dp))
+                            }
+
+                            // Attachment Icon Preview
+                            if (conversation.lastMessageAttachmentType != null) {
+                                when (conversation.lastMessageAttachmentType) {
+                                    "IMAGE" -> Icon(
+                                        imageVector = Icons.Outlined.PhotoCamera,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    "LOCATION_PIN" -> Icon(
+                                        imageVector = Icons.Outlined.LocationOn,
+                                        contentDescription = null,
+                                        tint = EmeraldVerified,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    else -> Icon(
+                                        imageVector = Icons.Outlined.Description,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(4.dp))
+                            }
+
+                            Text(
+                                text = conversation.lastMessage,
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
 
                     Spacer(modifier = Modifier.width(8.dp))
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        PassCountdownChip(
-                            timeRemaining = conversation.passTimeRemaining,
-                            passType = conversation.passType
-                        )
+                        if (conversation.isRoom) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color(0xFFF1F5F9))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = conversation.passTimeRemaining,
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        } else {
+                            PassCountdownChip(
+                                timeRemaining = conversation.passTimeRemaining,
+                                passType = conversation.passType
+                            )
+                        }
 
                         if (conversation.unreadCount > 0) {
                             Spacer(modifier = Modifier.width(6.dp))
@@ -355,7 +468,8 @@ fun ConversationRowItem(
                             ) {
                                 Text(
                                     text = conversation.unreadCount.toString(),
-                                    fontSize = 10.sp
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
                                 )
                             }
                         }

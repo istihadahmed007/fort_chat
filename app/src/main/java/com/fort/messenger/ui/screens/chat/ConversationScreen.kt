@@ -50,13 +50,25 @@ fun ConversationScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val conversation = uiState.conversations.find { it.id == conversationId }
-    var inputText by remember { mutableStateOf("") }
+    var inputText by remember(conversationId) { mutableStateOf(viewModel.getDraft(conversationId)) }
     var isSearchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var selectedMessageForActions by remember { mutableStateOf<ChatMessage?>(null) }
     var showEditDialog by remember { mutableStateOf(false) }
     var editingText by remember { mutableStateOf("") }
     var showAttachmentMenu by remember { mutableStateOf(false) }
+
+    // Auto mark as read on entering chat
+    LaunchedEffect(conversationId) {
+        viewModel.markConversationAsRead(conversationId)
+    }
+
+    // Reset typing status on exit
+    DisposableEffect(conversationId) {
+        onDispose {
+            viewModel.onUserTyping(conversationId, false)
+        }
+    }
 
     if (conversation == null) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -136,30 +148,31 @@ fun ConversationScreen(
                         )
                     }
 
-                    // Audio Call Button
-                    IconButton(onClick = {
-                        val peerUserId = conversationId.removePrefix("conv_")
-                        viewModel.startCall(peerUserId, conversation.participantName, CallType.AUDIO)
-                    }) {
-                        Icon(
-                            imageVector = Icons.Outlined.Call,
-                            contentDescription = "Audio Call",
-                            tint = RoyalBluePrimary,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
+                    // Audio & Video Call Buttons (for direct 1-to-1 contacts)
+                    if (!conversation.isRoom) {
+                        IconButton(onClick = {
+                            val peerUserId = conversationId.removePrefix("conv_")
+                            viewModel.startCall(peerUserId, conversation.participantName, CallType.AUDIO)
+                        }) {
+                            Icon(
+                                imageVector = Icons.Outlined.Call,
+                                contentDescription = "Audio Call",
+                                tint = RoyalBluePrimary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
 
-                    // Video Call Button
-                    IconButton(onClick = {
-                        val peerUserId = conversationId.removePrefix("conv_")
-                        viewModel.startCall(peerUserId, conversation.participantName, CallType.VIDEO)
-                    }) {
-                        Icon(
-                            imageVector = Icons.Outlined.Videocam,
-                            contentDescription = "Video Call",
-                            tint = RoyalBluePrimary,
-                            modifier = Modifier.size(22.dp)
-                        )
+                        IconButton(onClick = {
+                            val peerUserId = conversationId.removePrefix("conv_")
+                            viewModel.startCall(peerUserId, conversation.participantName, CallType.VIDEO)
+                        }) {
+                            Icon(
+                                imageVector = Icons.Outlined.Videocam,
+                                contentDescription = "Video Call",
+                                tint = RoyalBluePrimary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
                     }
 
                     // In-chat Search Toggle Button
@@ -365,7 +378,11 @@ fun ConversationScreen(
 
                     OutlinedTextField(
                         value = inputText,
-                        onValueChange = { inputText = it },
+                        onValueChange = {
+                            inputText = it
+                            viewModel.setDraft(conversationId, it)
+                            viewModel.onUserTyping(conversationId, it.isNotBlank())
+                        },
                         placeholder = {
                             Text("Encrypted message...", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         },
@@ -383,8 +400,11 @@ fun ConversationScreen(
                     IconButton(
                         onClick = {
                             if (inputText.isNotBlank()) {
-                                viewModel.sendMessage(inputText)
+                                val textToSend = inputText
                                 inputText = ""
+                                viewModel.setDraft(conversationId, "")
+                                viewModel.onUserTyping(conversationId, false)
+                                viewModel.sendMessage(textToSend)
                             }
                         },
                         modifier = Modifier

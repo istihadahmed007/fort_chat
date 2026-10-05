@@ -40,5 +40,8 @@ data class ChatConversation(
     val isTyping: Boolean = false,
     val isOnline: Boolean = false,
     val lastSeenText: String? = null,
+    val lastMessageIsMine: Boolean = false,
+    val lastMessageDeliveryStatus: String = "DELIVERED",
+    val lastMessageAttachmentType: String? = null,
     val messages: List<ChatMessage> = emptyList()
 )

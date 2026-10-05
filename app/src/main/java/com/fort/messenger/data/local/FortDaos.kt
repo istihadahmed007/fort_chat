@@ -160,6 +160,15 @@ interface ChatMessageDao {
 
     @Query("DELETE FROM chat_messages WHERE conversationId = :conversationId")
     suspend fun deleteConversationMessages(conversationId: String)
+
+    @Query("UPDATE chat_messages SET deliveryStatus = 'READ' WHERE conversationId = :conversationId AND isMine = 0 AND deliveryStatus != 'READ'")
+    suspend fun markMessagesAsReadForConversation(conversationId: String): Int
+
+    @Query("SELECT COUNT(*) FROM chat_messages WHERE conversationId = :conversationId AND isMine = 0 AND deliveryStatus != 'READ'")
+    fun getUnreadCountForConversation(conversationId: String): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM chat_messages WHERE conversationId = :conversationId AND isMine = 0 AND deliveryStatus != 'READ'")
+    suspend fun getUnreadCount(conversationId: String): Int
 }
 
 @Dao

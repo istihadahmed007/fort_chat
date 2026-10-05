@@ -120,6 +120,9 @@ class FortRepository(
             )
         )
         database.personaCardDao().insertCards(cards)
+        cards.forEach { card ->
+            remoteBackend.publishPublicKey(remoteUser.userId, card.type.name, card.publicKey)
+        }
         return Result.success(account)
     }
 
@@ -298,6 +301,13 @@ class FortRepository(
             status = "ACTIVE"
         )
         database.peerConnectionDao().insertConnection(connection)
+        // Transmit encrypted reciprocal greeting to establish conversation on sender's device too
+        sendEncryptedMessage(
+            conversationId = "conv_${request.senderUserId}",
+            senderUserId = currentUserId,
+            recipientUserId = request.senderUserId,
+            plaintext = "🤝 Knock First accepted. Sovereign channel connected."
+        )
         return Result.success(Unit)
     }
 
@@ -330,6 +340,13 @@ class FortRepository(
             status = "ACTIVE"
         )
         database.peerConnectionDao().insertConnection(connection)
+        // Transmit encrypted reciprocal greeting to establish conversation on sender's device too
+        sendEncryptedMessage(
+            conversationId = "conv_${request.senderUserId}",
+            senderUserId = currentUserId,
+            recipientUserId = request.senderUserId,
+            plaintext = "🤝 Granted 7-Day Contact Pass. Sovereign channel connected."
+        )
         return Result.success(Unit)
     }
 
@@ -406,8 +423,14 @@ class FortRepository(
         return Result.success(localEntity)
     }
 
-    suspend fun claimPass(token: String, claimantUserId: String, claimantDisplayName: String): Result<PeerConnectionEntity> {
-        val claimResult = remoteBackend.claimPass(token, claimantUserId)
+    suspend fun claimPass(
+        token: String,
+        claimantUserId: String,
+        claimantDisplayName: String,
+        passId: String? = null,
+        issuerDisplayName: String? = null
+    ): Result<PeerConnectionEntity> {
+        val claimResult = remoteBackend.claimPass(token, claimantUserId, passId)
         if (claimResult.isFailure) return Result.failure(claimResult.exceptionOrNull()!!)
         val remotePass = claimResult.getOrThrow()
 
@@ -431,12 +454,16 @@ class FortRepository(
             CardType.PERSONAL
         }
 
+        val effectiveDisplayName = issuerDisplayName?.takeIf { it.isNotBlank() }
+            ?: remoteBackend.fetchUserProfile(remotePass.issuerUserId).getOrNull()?.displayName
+            ?: "Pass Peer (${remotePass.cardType})"
+
         val connection = PeerConnectionEntity(
             connectionId = "conn_${UUID.randomUUID()}",
             userId = claimantUserId,
             peerUserId = remotePass.issuerUserId,
-            peerDisplayName = "Pass Peer (${remotePass.cardType})",
-            peerHandle = "@pass.${remotePass.issuerUserId.takeLast(6)}",
+            peerDisplayName = effectiveDisplayName,
+            peerHandle = "@${effectiveDisplayName.lowercase().replace(" ", "")}.fort",
             peerCardType = cardType,
             peerPublicKey = remotePass.issuerPublicKey,
             safetyNumber = safetyNumber,
@@ -447,6 +474,25 @@ class FortRepository(
         )
         database.peerConnectionDao().insertConnection(connection)
         return Result.success(connection)
+    }
+
+    suspend fun markConversationAsRead(conversationId: String, currentUserId: String) {
+        val unreadMessages = database.chatMessageDao().getMessagesForConversation(conversationId).firstOrNull()
+            ?.filter { !it.isMine && it.deliveryStatus != "READ" } ?: emptyList()
+        val count = database.chatMessageDao().markMessagesAsReadForConversation(conversationId)
+        if (count > 0) {
+            for (msg in unreadMessages) {
+                remoteBackend.updateDeliveryStatus(msg.messageId, "READ", currentUserId)
+            }
+        }
+    }
+
+    suspend fun setTypingStatus(userId: String, recipientUserId: String, isTyping: Boolean) {
+        remoteBackend.setTypingStatus(userId, recipientUserId, isTyping)
+    }
+
+    fun listenToPeerTyping(currentUserId: String, peerUserId: String): Flow<Boolean> {
+        return remoteBackend.listenToTypingStatus(currentUserId, peerUserId)
     }
 
     suspend fun revokePass(passId: String, currentUserId: String): Result<Unit> {
@@ -589,12 +635,14 @@ class FortRepository(
                         userCard.publicKey,
                         senderPubKey
                     )
+                    val peerProfile = remoteBackend.fetchUserProfile(packet.senderUserId).getOrNull()
+                    val peerName = peerProfile?.displayName ?: "Pass Peer"
                     val autoConnection = PeerConnectionEntity(
                         connectionId = "conn_${java.util.UUID.randomUUID()}",
                         userId = currentUserId,
                         peerUserId = packet.senderUserId,
-                        peerDisplayName = "Pass Peer",
-                        peerHandle = "@peer.${packet.senderUserId.takeLast(6)}",
+                        peerDisplayName = peerName,
+                        peerHandle = peerProfile?.fortId ?: "@peer.${packet.senderUserId.takeLast(6)}",
                         peerCardType = CardType.PERSONAL,
                         peerPublicKey = senderPubKey,
                         safetyNumber = safetyNumber,
@@ -710,6 +758,9 @@ class FortRepository(
         database.chatMessageDao().updateDeliveryStatus(messageId, "READ")
         return Result.success(Unit)
     }
+
+    suspend fun getUnreadCount(conversationId: String): Int =
+        database.chatMessageDao().getUnreadCount(conversationId)
 
     // --- Mood Ring & Quiet Presence ---
 

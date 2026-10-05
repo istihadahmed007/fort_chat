@@ -306,7 +306,7 @@ fun SearchPeopleModal(
                                             Button(
                                                 onClick = {
                                                     onDismissRequest()
-                                                    onOpenChat("conv_${user.userId}")
+                                                    onOpenChat(user.userId)
                                                 },
                                                 colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
                                                 shape = RoundedCornerShape(10.dp),

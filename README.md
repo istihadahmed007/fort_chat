@@ -54,8 +54,11 @@ The server relay (`FortRemoteBackend` / Cloud Firestore) functions strictly as a
 | **Reciprocal Two-Way Connection** | Upon pass claim, claimant saves the peer connection and immediately transmits an authenticated, end-to-end encrypted sovereign handshake packet. When the issuer syncs inbound messages, a reciprocal connection is automatically established in their local database, placing the new conversation in both users' Chats screen. |
 | **Fail-Closed Pass Publishing** | If remote publishing fails (network failure, Firestore permission denial, or offline), the invitation is rejected immediately and is never saved to the local Room database as active or usable. |
 | **New Chat Actions & Empty State** | Chats screen features a prominent "New Chat" action sheet and empty state quick-action buttons offering "Scan QR Invitation", "Create Invitation Pass", and "Find by Fort ID". Top-bar QR action is wired directly to the live Camera scanner. |
-| **Knock First Sandbox** | Real queue holding untrusted incoming requests. Senders cannot call or trigger downloads. Triage actions (`Accept Once`, `Grant 7-Day`, `Decline`, `Block & Report`) update persistent connections and server blocklists. |
-| **Modern Conversation Flow** | In-conversation text search, quoted replies with preview banner, real-time emoji message reactions, message editing with `(edited)` indicator, message deletion ("This message was deleted"), delivery receipts (`PENDING` clock, `SENT` single tick, `DELIVERED` double tick, `READ` blue double tick), and multi-type attachment picker. |
+| **User Discovery & Privacy** | Multi-mode discovery supporting exact Fort ID matching, display name matching with duplicate-name collision prevention, and rate-limited phone number search requiring verified requester credentials to stop scraper enumeration. |
+| **Knock First Protocol & Reciprocal Handshake** | Quarantines unverified inbound communications. Senders cannot call or trigger downloads. Triage actions (`Accept Once`, `Grant 7-Day`, `Decline`, `Block & Report`) transmit reciprocal encrypted handshakes to automatically establish two-way channels. |
+| **WebRTC Audio & Video Calling** | Authenticated signaling state machine (`RINGING`, `ACCEPTED`, `REJECTED`, `ENDED`) and ICE candidate exchange for 1-to-1 audio and video calls. |
+| **Private Location Sharing** | End-to-end encrypted static location pins and duration-limited ephemeral live location sharing (15 min, 1h, 8h) with real-time coordinate updates and automatic expiration cleanup. |
+| **Modern Conversation Flow** | In-conversation text search, quoted replies with preview banner, real-time emoji message reactions, draft retention across chats, live typing indicators, delivery/read receipts (`PENDING` clock, `SENT` single tick, `DELIVERED` double tick, `READ` emerald double tick), message editing with `(edited)` indicator, message deletion tombstones, and multi-type attachments. |
 | **Offline Queue & Retry** | Outbound messages dispatched while offline are persisted in SQLite with `PENDING` status. Automatic outbox flush upon network reconnection and manual retry banner in conversation view. |
 | **Circles & Rooms Administration** | Authenticated memberships, role-based controls (`ADMIN` / `MEMBER`), member invite dialogs, member removal/kick authorization, room exit, and task checklists. |
 | **Mood Ring & Quiet Presence** | Manual emotion selection (`ANGRY`, `HAPPY`, `SAD`, `STRESSED`, `READY_TO_TALK`, `NEED_QUIET`) and actionable "What I Need" layers. Real audience boundaries (`PRIVATE`, `CONNECTIONS`, `SELECTED_PEOPLE`, `CIRCLES`) and decay timers (30 min, 2h, end of day, custom). Expired moods vanish automatically upon query. |
@@ -76,7 +79,7 @@ $env:Path = "$env:JAVA_HOME\bin;" + $env:Path
 .\gradlew.bat testDebugUnitTest --no-daemon
 ```
 
-### Verified Test Cases (25 Tests, 100% Pass Rate)
+### Verified Test Cases (39 Tests, 100% Pass Rate)
 
 #### Cryptographic & Security Verification:
 * `testEndToEndEncryptionBetweenAliceAndBob`: Alice encrypts, server stores only ciphertext (zero readable text), Bob decrypts on-device, unauthorized attacker Charlie fails.
@@ -89,6 +92,14 @@ $env:Path = "$env:JAVA_HOME\bin;" + $env:Path
 * `testQrBitmapGenerationAndDecoding`: Real ZXing QR bitmap generation, 2D matrix rendering, and camera frame decoding via `QRCodeReader`.
 * `testTwoWayConnectionCreationAndMessaging`: Bob claims Alice's pass, transmits an E2EE greeting handshake; Alice syncs inbound messages and automatically creates the reciprocal peer connection, enabling two-way conversation.
 * `testPassPublishFailureDoesNotSaveLocalPass`: Remote publishing failure (e.g. offline/network failure) fails closed and does not store un-published passes in local SQLite storage.
+* `testQrInvitationClaimSuccessAndFailureScenarios`: Pass claiming with passId fallback, single-use duplication rejection, normalized token variants (without `PASS-` prefix, lowercase), and revoked pass rejection.
+
+#### Discovery, Calling & Location Sharing:
+* `testPeopleDiscoveryAndPrivacyRestrictions`: Multi-mode user discovery (display name duplicate handling, Fort ID search, and anti-enumeration verified phone search).
+* `testKnockFirstReciprocalConnectionAndConversationInitialization`: Knock First flow from search discovery, inbound sync, 7-day connection grant, and automated reciprocal handshake.
+* `testWebRtcSignalingAudioVideoCallStates`: Outgoing/incoming audio/video calling states (`RINGING` -> `ACCEPTED` -> `ENDED`) and authenticated ICE candidate exchange.
+* `testEphemeralLocationSharingPinLiveAndExpiry`: Static map pin encryption, 15-minute live location session publishing, coordinate updates, and stop sharing with expiration verification.
+* `testPresenceAndTypingIndicators`: Real-time typing status dispatch and peer typing observation flows.
 
 #### Messaging, Persistence & Room Management:
 * `testMessageReactionsEditAndDelete`: Real-time emoji reaction toggle, message edit state updates, and message deletion tombstones.
@@ -109,7 +120,7 @@ $env:Path = "$env:JAVA_HOME\bin;" + $env:Path
 * `testAllMoodTypesRepresented`: Ensures all 6 emotional states are present.
 * `testAllShareCheckRiskLevelsRepresented`: Ensures all risk severity levels are enforced.
 
-**Result:** `25 tests completed, 0 failures. BUILD SUCCESSFUL.`
+**Result:** `39 tests completed, 0 failures. BUILD SUCCESSFUL.`
 
 ---
 

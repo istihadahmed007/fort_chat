@@ -64,6 +64,7 @@ data class FortUiState(
     val activeGeneratedPass: ContactPass? = null,
     val replyingToMessage: ChatMessage? = null,
     val inChatSearchQuery: String = "",
+    val conversationDrafts: Map<String, String> = emptyMap(),
     val isPeerTyping: Boolean = false,
     // Share Check State
     val inspectedFileReport: ScrubberReport? = null,
@@ -119,6 +120,7 @@ class FortMainViewModel @JvmOverloads constructor(
     var webrtcManager: WebRtcCallManager? = null
     private var activeCallJob: kotlinx.coroutines.Job? = null
     private var iceCandidatesJob: kotlinx.coroutines.Job? = null
+    private var typingListenerJob: kotlinx.coroutines.Job? = null
 
     init {
         initializeAccountAndData()
@@ -211,10 +213,15 @@ class FortMainViewModel @JvmOverloads constructor(
             }
         }
 
-        // 3. Observe Peer Connections & Build Conversation Feed
+        // 3. Observe Peer Connections & Private Rooms to Build Unified Conversation Feed
         viewModelScope.launch {
-            repository.getActiveConnections(userId).collect { connections ->
-                val convList = connections.map { conn ->
+            combine(
+                repository.getActiveConnections(userId),
+                repository.getActiveRooms()
+            ) { connections, rooms ->
+                Pair(connections, rooms)
+            }.collect { (connections, rooms) ->
+                val directConvs = connections.map { conn ->
                     val passRemaining = if (conn.passExpiresAt == Long.MAX_VALUE) {
                         "Ongoing"
                     } else {
@@ -224,8 +231,16 @@ class FortMainViewModel @JvmOverloads constructor(
 
                     val convId = "conv_${conn.peerUserId}"
                     val messages = repository.getConversationMessages(convId).firstOrNull() ?: emptyList()
-                    val lastMsg = messages.lastOrNull()?.decryptedTextCache ?: "Pass established. E2EE ready."
-                    val lastTime = messages.lastOrNull()?.let { "Just now" } ?: "Recent"
+                    val lastMsgObj = messages.lastOrNull()
+                    val unreadCount = messages.count { !it.isMine && it.deliveryStatus != "READ" }
+                    val lastTime = lastMsgObj?.let { formatTimestamp(it.timestamp) } ?: "Recent"
+                    val lastMsg = lastMsgObj?.let {
+                        if (it.attachmentType == "LOCATION_PIN") "📍 Pinned Location"
+                        else if (it.attachmentType == "IMAGE") "📷 Photo"
+                        else if (it.attachmentType == "FILE") "📄 ${it.attachmentName ?: "Document"}"
+                        else if (it.isDeleted) "🚫 This message was deleted"
+                        else it.decryptedTextCache
+                    } ?: "Pass established. E2EE ready."
 
                     ChatConversation(
                         id = convId,
@@ -235,13 +250,16 @@ class FortMainViewModel @JvmOverloads constructor(
                         cardType = conn.peerCardType,
                         lastMessage = lastMsg,
                         lastMessageTime = lastTime,
-                        unreadCount = 0,
+                        unreadCount = unreadCount,
                         moodEmoji = null,
                         moodWhatINeed = null,
                         passTimeRemaining = passRemaining,
                         passType = conn.passType,
                         isRoom = false,
                         isTyping = conn.isTyping,
+                        lastMessageIsMine = lastMsgObj?.isMine ?: false,
+                        lastMessageDeliveryStatus = lastMsgObj?.deliveryStatus ?: "DELIVERED",
+                        lastMessageAttachmentType = lastMsgObj?.attachmentType,
                         messages = messages.map { m ->
                             val reactionsMap = mutableMapOf<String, Int>()
                             val myReactionsList = mutableListOf<String>()
@@ -254,15 +272,13 @@ class FortMainViewModel @JvmOverloads constructor(
                                         if (arr.getString(i) == userId) myReactionsList.add(key)
                                     }
                                 }
-                            } catch (e: Exception) {
-                                // Default empty
-                            }
+                            } catch (_: Exception) {}
 
                             ChatMessage(
                                 id = m.messageId,
                                 senderName = if (m.isMine) "You" else conn.peerDisplayName,
                                 text = if (m.isDeleted) "🚫 This message was deleted" else m.decryptedTextCache,
-                                timestamp = "Just now",
+                                timestamp = formatTimestamp(m.timestamp),
                                 isMine = m.isMine,
                                 isScrubbedMedia = m.isScrubbedMedia,
                                 deliveryStatus = m.deliveryStatus,
@@ -281,7 +297,67 @@ class FortMainViewModel @JvmOverloads constructor(
                         }
                     )
                 }
-                _uiState.update { it.copy(conversations = convList) }
+
+                val roomConvs = rooms.map { r ->
+                    val roomConvId = "room_${r.roomId}"
+                    val messages = repository.getConversationMessages(roomConvId).firstOrNull() ?: emptyList()
+                    val lastMsgObj = messages.lastOrNull()
+                    val unreadCount = messages.count { !it.isMine && it.deliveryStatus != "READ" }
+                    val lastTime = lastMsgObj?.let { formatTimestamp(it.timestamp) } ?: "Active"
+                    val lastMsg = lastMsgObj?.let {
+                        if (it.attachmentType == "LOCATION_PIN") "📍 Pinned Location"
+                        else if (it.attachmentType == "IMAGE") "📷 Photo"
+                        else if (it.attachmentType == "FILE") "📄 ${it.attachmentName ?: "Document"}"
+                        else if (it.isDeleted) "🚫 This message was deleted"
+                        else it.decryptedTextCache
+                    } ?: "Secure Private Room active"
+
+                    val daysLeft = maxOf(0L, (r.expiresAt - System.currentTimeMillis()) / (86400000L))
+
+                    ChatConversation(
+                        id = roomConvId,
+                        participantName = r.name,
+                        handle = r.purpose,
+                        avatarEmoji = r.iconEmoji,
+                        cardType = CardType.PERSONAL,
+                        lastMessage = lastMsg,
+                        lastMessageTime = lastTime,
+                        unreadCount = unreadCount,
+                        moodEmoji = null,
+                        moodWhatINeed = null,
+                        passTimeRemaining = "$daysLeft days left",
+                        passType = PassDurationType.SEVEN_DAYS,
+                        isRoom = true,
+                        isTyping = false,
+                        lastMessageIsMine = lastMsgObj?.isMine ?: false,
+                        lastMessageDeliveryStatus = lastMsgObj?.deliveryStatus ?: "DELIVERED",
+                        lastMessageAttachmentType = lastMsgObj?.attachmentType,
+                        messages = messages.map { m ->
+                            ChatMessage(
+                                id = m.messageId,
+                                senderName = if (m.isMine) "You" else "Member",
+                                text = if (m.isDeleted) "🚫 This message was deleted" else m.decryptedTextCache,
+                                timestamp = formatTimestamp(m.timestamp),
+                                isMine = m.isMine,
+                                isScrubbedMedia = m.isScrubbedMedia,
+                                deliveryStatus = m.deliveryStatus,
+                                replyToMessageId = m.replyToMessageId,
+                                replyToSenderName = m.replyToSenderName,
+                                replyToText = m.replyToText,
+                                reactions = emptyMap(),
+                                myReactions = emptyList(),
+                                isEdited = m.isEdited,
+                                isDeleted = m.isDeleted,
+                                attachmentUri = m.attachmentUri,
+                                attachmentType = m.attachmentType,
+                                attachmentName = m.attachmentName,
+                                attachmentSize = m.attachmentSize
+                            )
+                        }
+                    )
+                }
+
+                _uiState.update { it.copy(conversations = directConvs + roomConvs) }
             }
         }
 
@@ -700,7 +776,9 @@ class FortMainViewModel @JvmOverloads constructor(
             val result = repository.claimPass(
                 token = payload.token,
                 claimantUserId = user.userId,
-                claimantDisplayName = myDisplayName
+                claimantDisplayName = myDisplayName,
+                passId = payload.passId.takeIf { it.isNotBlank() },
+                issuerDisplayName = payload.issuerDisplayName.takeIf { it.isNotBlank() }
             )
             _uiState.update { it.copy(isClaimingPass = false) }
             if (result.isSuccess) {
@@ -1126,31 +1204,94 @@ class FortMainViewModel @JvmOverloads constructor(
         }
     }
 
-    // --- Modern Messenger Capabilities (Replies, Reactions, Edits, Deletes, Attachments, Status) ---
+    // --- Modern Messenger Capabilities (Drafts, Typing, Read Receipts, Replies, Reactions, Edits, Deletes, Attachments, Status) ---
+
+    fun getDraft(conversationId: String): String = _uiState.value.conversationDrafts[conversationId] ?: ""
+
+    fun setDraft(conversationId: String, text: String) {
+        _uiState.update { state ->
+            val updated = state.conversationDrafts.toMutableMap()
+            if (text.isBlank()) {
+                updated.remove(conversationId)
+            } else {
+                updated[conversationId] = text
+            }
+            state.copy(conversationDrafts = updated)
+        }
+    }
+
+    fun onUserTyping(conversationId: String, isTyping: Boolean) {
+        val user = _uiState.value.currentUserAccount ?: return
+        if (!conversationId.startsWith("room_")) {
+            val peerUserId = conversationId.removePrefix("conv_")
+            viewModelScope.launch {
+                repository.setTypingStatus(user.userId, peerUserId, isTyping)
+            }
+        }
+    }
+
+    fun markConversationAsRead(conversationId: String) {
+        val user = _uiState.value.currentUserAccount ?: return
+        viewModelScope.launch {
+            repository.markConversationAsRead(conversationId, user.userId)
+        }
+    }
 
     fun openChat(conversationId: String) {
         val user = _uiState.value.currentUserAccount ?: return
-        val peerUserId = conversationId.removePrefix("conv_")
+        val rawId = conversationId.removePrefix("conv_")
+        val cleanConvId = if (conversationId.startsWith("room_")) conversationId else "conv_$rawId"
+        val peerUserId = rawId
+
+        // Mark conversation as read in local Room DB and update deliveryStatus to READ
+        viewModelScope.launch {
+            repository.markConversationAsRead(cleanConvId, user.userId)
+        }
+
+        // Subscribe to peer typing indicator
+        typingListenerJob?.cancel()
+        if (!cleanConvId.startsWith("room_")) {
+            typingListenerJob = viewModelScope.launch {
+                repository.listenToPeerTyping(user.userId, peerUserId).collect { isTyping ->
+                    _uiState.update { it.copy(isPeerTyping = isTyping) }
+                }
+            }
+        }
+
         viewModelScope.launch {
             val connection = repository.getActiveConnections(user.userId).firstOrNull()?.find { it.peerUserId == peerUserId }
             _uiState.update {
                 it.copy(
-                    currentOpenChatId = conversationId,
+                    currentOpenChatId = cleanConvId,
                     currentPeerConnection = connection,
                     inChatSearchQuery = "",
-                    replyingToMessage = null
+                    replyingToMessage = null,
+                    isPeerTyping = false
                 )
             }
         }
     }
 
-    fun closeChat() = _uiState.update {
-        it.copy(
-            currentOpenChatId = null,
-            currentPeerConnection = null,
-            replyingToMessage = null,
-            inChatSearchQuery = ""
-        )
+    fun closeChat() {
+        val user = _uiState.value.currentUserAccount
+        val chatId = _uiState.value.currentOpenChatId
+        if (user != null && chatId != null && !chatId.startsWith("room_")) {
+            val peerUserId = chatId.removePrefix("conv_")
+            viewModelScope.launch {
+                repository.setTypingStatus(user.userId, peerUserId, false)
+            }
+        }
+        typingListenerJob?.cancel()
+        typingListenerJob = null
+        _uiState.update {
+            it.copy(
+                currentOpenChatId = null,
+                currentPeerConnection = null,
+                replyingToMessage = null,
+                inChatSearchQuery = "",
+                isPeerTyping = false
+            )
+        }
     }
 
     fun setReplyingTo(message: ChatMessage?) = _uiState.update { it.copy(replyingToMessage = message) }
@@ -1169,6 +1310,10 @@ class FortMainViewModel @JvmOverloads constructor(
         val chatId = _uiState.value.currentOpenChatId ?: return
         val peerUserId = chatId.removePrefix("conv_")
         val replying = _uiState.value.replyingToMessage
+
+        // Clear draft and typing status on send
+        setDraft(chatId, "")
+        onUserTyping(chatId, false)
 
         viewModelScope.launch {
             val result = repository.sendEncryptedMessage(
@@ -1445,4 +1590,23 @@ class FortMainViewModel @JvmOverloads constructor(
     }
 
     fun clearToast() = _uiState.update { it.copy(toastMessage = null) }
+
+    companion object {
+        fun formatTimestamp(millis: Long): String {
+            if (millis <= 0) return ""
+            val now = System.currentTimeMillis()
+            val diff = now - millis
+            val calMsg = java.util.Calendar.getInstance().apply { timeInMillis = millis }
+            val calNow = java.util.Calendar.getInstance().apply { timeInMillis = now }
+            val timeFormat = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+            return when {
+                diff < 60 * 1000 -> "Just now"
+                calMsg.get(java.util.Calendar.YEAR) == calNow.get(java.util.Calendar.YEAR) &&
+                calMsg.get(java.util.Calendar.DAY_OF_YEAR) == calNow.get(java.util.Calendar.DAY_OF_YEAR) -> timeFormat.format(java.util.Date(millis))
+                calMsg.get(java.util.Calendar.YEAR) == calNow.get(java.util.Calendar.YEAR) &&
+                calMsg.get(java.util.Calendar.DAY_OF_YEAR) == calNow.get(java.util.Calendar.DAY_OF_YEAR) - 1 -> "Yesterday"
+                else -> java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault()).format(java.util.Date(millis))
+            }
+        }
+    }
 }

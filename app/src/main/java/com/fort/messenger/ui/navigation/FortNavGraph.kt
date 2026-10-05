@@ -195,7 +195,8 @@ fun FortNavGraph(
             onOpenChat = { peerUserId ->
                 viewModel.closeSearchPeople()
                 currentDestination = FortDestination.CHATS
-                viewModel.openChat("conv_$peerUserId")
+                val chatId = if (peerUserId.startsWith("conv_")) peerUserId else "conv_$peerUserId"
+                viewModel.openChat(chatId)
             },
             onKnockFirst = { user, intro -> viewModel.sendKnockFirstRequest(user, intro) }
         )

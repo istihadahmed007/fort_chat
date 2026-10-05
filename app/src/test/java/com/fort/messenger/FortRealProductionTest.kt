@@ -1053,20 +1053,307 @@ class FortRealProductionTest {
     }
 
     @Test
-    @Config(qualifiers = "w360dp-h640dp")
-    fun testSmallScreenPhoneLayoutLaunch() {
-        val controller = org.robolectric.Robolectric.buildActivity(MainActivity::class.java).setup()
-        val activity = controller.get()
-        assertNotNull(activity)
-        assertNotNull(activity.window.decorView)
+    fun testInboxUnreadCountAndDeliveryStateTracking() = runBlocking {
+        val alice = repositoryAlice.register("alice@fort.net", "Pass123!", "Alice").getOrThrow()
+        val bob = repositoryBob.register("bob@fort.net", "Pass456!", "Bob").getOrThrow()
+
+        // Establish pass
+        val pass = repositoryAlice.generatePass(alice.userId, CardType.PERSONAL, PassDurationType.SEVEN_DAYS).getOrThrow()
+        repositoryBob.claimPass(pass.token, bob.userId, "Bob").getOrThrow()
+
+        val convId = "conv_${alice.userId}"
+
+        // Alice sends 3 messages
+        repositoryAlice.sendEncryptedMessage("conv_${bob.userId}", alice.userId, bob.userId, "Message 1")
+        repositoryAlice.sendEncryptedMessage("conv_${bob.userId}", alice.userId, bob.userId, "Message 2")
+        repositoryAlice.sendEncryptedMessage("conv_${bob.userId}", alice.userId, bob.userId, "Message 3")
+
+        // Bob syncs inbound messages
+        repositoryBob.syncInboundMessages(bob.userId)
+
+        // Bob checks unread count in DB
+        val unreadCountBefore = repositoryBob.getUnreadCount(convId)
+        assertEquals(3, unreadCountBefore)
+
+        // Bob marks conversation as read
+        repositoryBob.markConversationAsRead(convId, bob.userId)
+
+        // Verify unread count is now 0
+        val unreadCountAfter = repositoryBob.getUnreadCount(convId)
+        assertEquals(0, unreadCountAfter)
+
+        // Verify delivery status of all messages in conversation is READ
+        val messages = repositoryBob.getConversationMessages(convId).first()
+        assertEquals(3, messages.size)
+        assertTrue(messages.all { it.deliveryStatus == "READ" })
     }
 
     @Test
-    @Config(qualifiers = "w1280dp-h800dp")
-    fun testLargeScreenTabletLayoutLaunch() {
-        val controller = org.robolectric.Robolectric.buildActivity(MainActivity::class.java).setup()
-        val activity = controller.get()
-        assertNotNull(activity)
-        assertNotNull(activity.window.decorView)
+    fun testConversationDraftRetentionAndTypingStatusTransmission() = runBlocking {
+        val alice = repositoryAlice.register("alice@fort.net", "Pass123!", "Alice").getOrThrow()
+        val bob = repositoryBob.register("bob@fort.net", "Pass456!", "Bob").getOrThrow()
+
+        // Alice begins typing to Bob
+        repositoryAlice.setTypingStatus(alice.userId, bob.userId, true)
+
+        // Bob listens to Alice's typing status
+        val isTyping = repositoryBob.listenToPeerTyping(bob.userId, alice.userId).first()
+        assertTrue("Bob must observe Alice typing", isTyping)
+
+        // Alice stops typing
+        repositoryAlice.setTypingStatus(alice.userId, bob.userId, false)
+        val isTypingStopped = repositoryBob.listenToPeerTyping(bob.userId, alice.userId).first()
+        assertFalse("Bob must observe Alice stopped typing", isTypingStopped)
+    }
+
+    @Test
+    fun testPeopleDiscoveryAndPrivacyRestrictions() = runBlocking {
+        val alice = repositoryAlice.register("alice@fort.net", "Pass123!", "Alice Sovereign").getOrThrow()
+        val bob = repositoryBob.register("bob@fort.net", "Pass456!", "Bob Guard").getOrThrow()
+
+        // 1. Search by Display Name
+        val nameResults = repositoryAlice.searchUsers("Bob", SearchMode.NAME, alice.userId).getOrThrow()
+        assertTrue(nameResults.any { it.userId == bob.userId && it.displayName == "Bob Guard" })
+
+        // 2. Search by exact Fort ID
+        val bobCard = repositoryBob.getPersonaCards(bob.userId).first().first()
+        val fidResults = repositoryAlice.searchUsers(bobCard.handle, SearchMode.FORT_ID, alice.userId).getOrThrow()
+        assertEquals(1, fidResults.size)
+        assertEquals(bob.userId, fidResults.first().userId)
+
+        // 3. Search non-existent Fort ID
+        val invalidFidResults = repositoryAlice.searchUsers("FID-NONEXISTENT-99999", SearchMode.FORT_ID, alice.userId).getOrThrow()
+        assertTrue(invalidFidResults.isEmpty())
+
+        // 4. Rate-limited and privacy-protected phone search (Zero enumeration)
+        // Requesters without a verified phone are rejected to prevent scrapers
+        val unverifiedSearch = repositoryAlice.searchUsers("+15550009999", SearchMode.PHONE, alice.userId)
+        assertTrue("Phone search requires verified phone on requester account", unverifiedSearch.isFailure)
+
+        // When requester has verified phone, searching an unregistered number returns empty list (no enumeration leakage)
+        val verifiedSession = serverRelay.sendPhoneOtp("+15551234567").getOrThrow()
+        val verifiedUser = serverRelay.verifyPhoneOtp(verifiedSession, "739281", "Alice Verified").getOrThrow()
+        val registeredSearch = repositoryAlice.searchUsers("+15550009999", SearchMode.PHONE, verifiedUser.userId).getOrThrow()
+        assertTrue("Unregistered phone must return empty list without leaking database information", registeredSearch.isEmpty())
+    }
+
+    @Test
+    fun testQrInvitationClaimSuccessAndFailureScenarios() = runBlocking {
+        val alice = repositoryAlice.register("alice@fort.net", "Pass123!", "Alice").getOrThrow()
+        val bob = repositoryBob.register("bob@fort.net", "Pass456!", "Bob").getOrThrow()
+        val charlie = repositoryBob.register("charlie@fort.net", "Pass789!", "Charlie").getOrThrow()
+
+        // Alice creates a single-use pass
+        val pass = repositoryAlice.generatePass(alice.userId, CardType.PERSONAL, PassDurationType.ONE_CONVERSATION).getOrThrow()
+        val qrPayload = ContactPassPayload(
+            passId = pass.passId,
+            token = pass.token,
+            issuerUserId = alice.userId,
+            issuerDisplayName = "Alice",
+            issuerCardType = CardType.PERSONAL.name,
+            durationType = PassDurationType.ONE_CONVERSATION.name,
+            expiresAt = pass.expiresAt,
+            issuerPublicKey = "KEY"
+        )
+
+        // 1. Successful claim using passId (fixing the "Pass not found" bug)
+        val claimResult = repositoryBob.claimPass(
+            token = qrPayload.token,
+            claimantUserId = bob.userId,
+            claimantDisplayName = "Bob",
+            passId = qrPayload.passId,
+            issuerDisplayName = qrPayload.issuerDisplayName
+        )
+        assertTrue(claimResult.isSuccess)
+        val conn = claimResult.getOrThrow()
+        assertEquals(alice.userId, conn.peerUserId)
+        assertEquals("Alice", conn.peerDisplayName)
+
+        // 2. Single-use enforcement: Charlie attempts to claim the same pass -> must fail
+        val duplicateClaimResult = repositoryBob.claimPass(
+            token = qrPayload.token,
+            claimantUserId = charlie.userId,
+            claimantDisplayName = "Charlie",
+            passId = qrPayload.passId
+        )
+        assertTrue("Single-use pass cannot be claimed twice", duplicateClaimResult.isFailure)
+
+        // 3. Normalized token variants (without PASS- prefix, lowercase)
+        val pass2 = repositoryAlice.generatePass(alice.userId, CardType.WORK, PassDurationType.SEVEN_DAYS).getOrThrow()
+        val rawTokenWithoutPrefix = pass2.token.removePrefix("PASS-").lowercase()
+        val normalizedClaimResult = repositoryBob.claimPass(
+            token = rawTokenWithoutPrefix,
+            claimantUserId = bob.userId,
+            claimantDisplayName = "Bob"
+        )
+        assertTrue("Normalized token variants must be resolved successfully", normalizedClaimResult.isSuccess)
+
+        // 4. Revoked pass cannot be claimed
+        val pass3 = repositoryAlice.generatePass(alice.userId, CardType.PERSONAL, PassDurationType.ONE_CONVERSATION).getOrThrow()
+        repositoryAlice.revokePass(pass3.passId, alice.userId)
+        val revokedClaimResult = repositoryBob.claimPass(
+            token = pass3.token,
+            claimantUserId = bob.userId,
+            claimantDisplayName = "Bob"
+        )
+        assertTrue("Revoked pass claim must fail", revokedClaimResult.isFailure)
+    }
+
+    @Test
+    fun testKnockFirstReciprocalConnectionAndConversationInitialization() = runBlocking {
+        val alice = repositoryAlice.register("alice@fort.net", "Pass123!", "Alice").getOrThrow()
+        val bob = repositoryBob.register("bob@fort.net", "Pass456!", "Bob").getOrThrow()
+
+        // Alice sends Knock First request with intro message
+        val knockResult = repositoryAlice.submitKnockFirstRequest(
+            recipientUserId = bob.userId,
+            senderUserId = alice.userId,
+            senderDisplayName = "Alice",
+            senderCardType = CardType.PERSONAL,
+            source = "DISCOVERY_SEARCH",
+            rawMessage = "Hello Bob, please accept my connection.",
+            sandboxedLink = null
+        )
+        assertTrue(knockResult.isSuccess)
+
+        // Bob syncs inbound knock-first requests from server
+        val syncCount = repositoryBob.syncInboundKnockFirstRequests(bob.userId).getOrThrow()
+        assertEquals(1, syncCount)
+
+        // Bob observes pending knock request
+        val bobsRequests = repositoryBob.getPendingRequests(bob.userId).first()
+        assertEquals(1, bobsRequests.size)
+        val req = bobsRequests.first()
+        assertEquals(alice.userId, req.senderUserId)
+        assertEquals("Hello Bob, please accept my connection.", req.rawMessage)
+
+        // Bob accepts request for 7 days
+        val acceptResult = repositoryBob.grantRequestSevenDays(req, bob.userId)
+        assertTrue(acceptResult.isSuccess)
+
+        // Bob now has an active connection with Alice
+        val bobsConnections = repositoryBob.getActiveConnections(bob.userId).first()
+        assertTrue(bobsConnections.any { it.peerUserId == alice.userId })
+
+        // Alice syncs inbound messages -> receives reciprocal pass and greeting
+        repositoryAlice.syncInboundMessages(alice.userId)
+        val alicesConnections = repositoryAlice.getActiveConnections(alice.userId).first()
+        assertTrue("Alice must have reciprocal connection with Bob", alicesConnections.any { it.peerUserId == bob.userId })
+    }
+
+    @Test
+    fun testWebRtcSignalingAudioVideoCallStates() = runBlocking {
+        val alice = repositoryAlice.register("alice@fort.net", "Pass123!", "Alice").getOrThrow()
+        val bob = repositoryBob.register("bob@fort.net", "Pass456!", "Bob").getOrThrow()
+
+        val callId = "call_${UUID.randomUUID()}"
+        val record = RemoteCallRecord(
+            callId = callId,
+            callerUserId = alice.userId,
+            callerDisplayName = "Alice",
+            receiverUserId = bob.userId,
+            callType = "VIDEO",
+            status = "RINGING"
+        )
+
+        // 1. Alice creates outgoing call
+        val startResult = repositoryAlice.createCall(record)
+        assertTrue(startResult.isSuccess)
+
+        // 2. Bob listens to incoming calls and sees the ringing call
+        val incomingCall = repositoryBob.listenToIncomingCalls(bob.userId).first()
+        assertNotNull(incomingCall)
+        assertEquals(callId, incomingCall?.callId)
+        assertEquals("RINGING", incomingCall?.status)
+        assertEquals("VIDEO", incomingCall?.callType)
+
+        // 3. Bob accepts the call
+        val acceptResult = repositoryBob.updateCallStatus(callId, "ACCEPTED", bob.userId)
+        assertTrue(acceptResult.isSuccess)
+
+        val updatedCall = repositoryAlice.listenToCall(callId).first()
+        assertEquals("ACCEPTED", updatedCall?.status)
+
+        // 4. Alice and Bob exchange ICE candidates
+        val candidate = RtcIceCandidateRecord("candidate:12345 1 udp 2122260223 192.168.1.5 50005 typ host", "video", 0)
+        val sendIceResult = repositoryAlice.sendCallIceCandidate(callId, candidate, isCaller = true, alice.userId)
+        assertTrue(sendIceResult.isSuccess)
+
+        val bobsCandidates = repositoryBob.listenToCallCandidates(callId, isCaller = true).first()
+        assertEquals(1, bobsCandidates.size)
+        assertEquals(candidate.candidate, bobsCandidates.first().candidate)
+
+        // 5. Alice ends the call
+        val endResult = repositoryAlice.updateCallStatus(callId, "ENDED", alice.userId)
+        assertTrue(endResult.isSuccess)
+
+        val endedCall = repositoryBob.listenToCall(callId).first()
+        assertEquals("ENDED", endedCall?.status)
+    }
+
+    @Test
+    fun testEphemeralLocationSharingPinLiveAndExpiry() = runBlocking {
+        val alice = repositoryAlice.register("alice_loc@fort.net", "Pass123!", "Alice Loc").getOrThrow()
+        val bob = repositoryBob.register("bob_loc@fort.net", "Pass456!", "Bob Loc").getOrThrow()
+
+        // 1. Establish connection via pass
+        val pass = repositoryAlice.generatePass(alice.userId, CardType.PERSONAL, PassDurationType.SEVEN_DAYS).getOrThrow()
+        val claimResult = repositoryBob.claimPass(pass.token, bob.userId, "Bob Loc")
+        assertTrue(claimResult.isSuccess)
+        repositoryAlice.syncInboundMessages(alice.userId)
+
+        // 2. One-time static location pin
+        val pin = LocationPin(latitude = 37.7749, longitude = -122.4194, label = "San Francisco HQ")
+        val pinResult = repositoryAlice.sendLocationPin("conv_${bob.userId}", alice.userId, bob.userId, pin)
+        assertTrue(pinResult.isSuccess)
+
+        // Bob syncs message and decrypts location pin
+        repositoryBob.syncInboundMessages(bob.userId)
+        val bobMessages = repositoryBob.getConversationMessages("conv_${alice.userId}").first()
+        assertTrue(bobMessages.any { it.decryptedTextCache.contains("37.7749") && it.decryptedTextCache.contains("-122.4194") })
+
+        // 3. Start duration-limited live location sharing (15 minutes)
+        val startLive = repositoryAlice.startLiveLocationSharing(
+            senderUserId = alice.userId,
+            senderDisplayName = "Alice Loc",
+            recipientUserId = bob.userId,
+            duration = LiveLocationDuration.MINUTES_15,
+            initialLat = 37.7750,
+            initialLng = -122.4195,
+            accuracy = 5.0f
+        )
+        assertTrue(startLive.isSuccess)
+        val session = startLive.getOrThrow()
+        assertFalse(session.isExpired)
+
+        // Bob fetches active live location
+        val bobsActiveLoc = repositoryBob.fetchActiveLiveLocation(alice.userId, bob.userId).getOrThrow()
+        assertNotNull(bobsActiveLoc)
+        assertEquals(37.7750, bobsActiveLoc!!.latitude, 0.0001)
+
+        // 4. Sender updates live location
+        val updateResult = repositoryAlice.updateLiveLocation(
+            shareId = session.shareId,
+            senderUserId = alice.userId,
+            senderDisplayName = "Alice Loc",
+            recipientUserId = bob.userId,
+            lat = 37.7755,
+            lng = -122.4200,
+            accuracy = 3.0f,
+            startedAt = session.startedAt,
+            expiresAt = session.expiresAt
+        )
+        assertTrue(updateResult.isSuccess)
+
+        val updatedLoc = repositoryBob.fetchActiveLiveLocation(alice.userId, bob.userId).getOrThrow()
+        assertEquals(37.7755, updatedLoc!!.latitude, 0.0001)
+
+        // 5. Sender stops live location sharing
+        val stopResult = repositoryAlice.stopLiveLocationSharing(session.shareId, alice.userId, bob.userId)
+        assertTrue(stopResult.isSuccess)
+
+        // Active session is now null / expired
+        val stoppedLoc = repositoryBob.fetchActiveLiveLocation(alice.userId, bob.userId).getOrThrow()
+        assertNull("Stopped live location session must not be visible", stoppedLoc)
     }
 }

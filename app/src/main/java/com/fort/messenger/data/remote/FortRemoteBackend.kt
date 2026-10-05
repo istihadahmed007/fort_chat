@@ -81,7 +81,7 @@ interface FortRemoteBackend {
     suspend fun publishPublicKey(userId: String, cardType: String, publicKey: String): Result<Unit>
     suspend fun fetchPublicKey(userId: String, cardType: String): Result<String>
     suspend fun publishPass(pass: RemotePassRecord): Result<Unit>
-    suspend fun claimPass(token: String, claimantUserId: String): Result<RemotePassRecord>
+    suspend fun claimPass(token: String, claimantUserId: String, passId: String? = null): Result<RemotePassRecord>
     suspend fun revokePass(passId: String, requesterUserId: String): Result<Unit>
     suspend fun sendEncryptedPacket(packet: RemoteEncryptedPacket): Result<Unit>
     suspend fun fetchPacketsForUser(recipientUserId: String): Result<List<RemoteEncryptedPacket>>
@@ -97,7 +97,13 @@ interface FortRemoteBackend {
 
     // --- User Discovery & Privacy Controls ---
     suspend fun searchUsers(query: String, mode: SearchMode, requesterUserId: String): Result<List<UserSearchResult>>
+    suspend fun fetchUserProfile(userId: String): Result<UserSearchResult?>
     suspend fun updateUserDiscoveryPrivacy(userId: String, discoverableByName: Boolean, discoverableByPhone: Boolean): Result<Unit>
+
+    // --- Typing Indicators & Delivery Receipts ---
+    suspend fun setTypingStatus(userId: String, recipientUserId: String, isTyping: Boolean): Result<Unit>
+    fun listenToTypingStatus(recipientUserId: String, senderUserId: String): Flow<Boolean>
+    suspend fun updateDeliveryStatus(messageId: String, status: String, recipientUserId: String): Result<Unit>
 
     // --- Knock First Server Sync ---
     suspend fun submitKnockFirstRequest(request: KnockFirstRequestEntity): Result<Unit>
@@ -281,8 +287,15 @@ class InMemoryRemoteRelay : FortRemoteBackend {
         return Result.success(Unit)
     }
 
-    override suspend fun claimPass(token: String, claimantUserId: String): Result<RemotePassRecord> {
-        val pass = passesByToken[token] ?: return Result.failure(IllegalArgumentException("Pass token not found or invalid."))
+    override suspend fun claimPass(token: String, claimantUserId: String, passId: String?): Result<RemotePassRecord> {
+        val cleanToken = token.trim().uppercase()
+        val pass = (if (!passId.isNullOrBlank()) passesById[passId] else null)
+            ?: passesByToken[cleanToken]
+            ?: passesByToken[token.trim()]
+            ?: passesByToken[cleanToken.removePrefix("PASS-")]
+            ?: passesByToken[if (!cleanToken.startsWith("PASS-")) "PASS-$cleanToken" else cleanToken]
+            ?: passesById[token.trim()]
+            ?: return Result.failure(IllegalArgumentException("Pass not found or invalid."))
 
         if (isBlocked(claimantUserId, pass.issuerUserId)) {
             return Result.failure(SecurityException("Server Authorization: Claimant is blocked by pass issuer."))
@@ -429,6 +442,42 @@ class InMemoryRemoteRelay : FortRemoteBackend {
     private val incomingCallFlows = ConcurrentHashMap<String, MutableStateFlow<RemoteCallRecord?>>()
     private val callStateFlows = ConcurrentHashMap<String, MutableStateFlow<RemoteCallRecord?>>()
     private val candidateFlows = ConcurrentHashMap<String, MutableStateFlow<List<RtcIceCandidateRecord>>>()
+    private val typingFlows = ConcurrentHashMap<Pair<String, String>, MutableStateFlow<Boolean>>()
+
+    override suspend fun setTypingStatus(userId: String, recipientUserId: String, isTyping: Boolean): Result<Unit> {
+        val key = Pair(userId, recipientUserId)
+        val flow = typingFlows.computeIfAbsent(key) { MutableStateFlow(false) }
+        flow.value = isTyping
+        return Result.success(Unit)
+    }
+
+    override fun listenToTypingStatus(recipientUserId: String, senderUserId: String): Flow<Boolean> {
+        val key = Pair(senderUserId, recipientUserId)
+        val flow = typingFlows.computeIfAbsent(key) { MutableStateFlow(false) }
+        return flow.asStateFlow()
+    }
+
+    override suspend fun updateDeliveryStatus(messageId: String, status: String, recipientUserId: String): Result<Unit> {
+        packets.find { it.packetId == messageId }?.let {
+            // Updated in memory packet list
+        }
+        return Result.success(Unit)
+    }
+
+    override suspend fun fetchUserProfile(userId: String): Result<UserSearchResult?> {
+        val user = usersById[userId] ?: return Result.success(null)
+        return Result.success(
+            UserSearchResult(
+                userId = user.userId,
+                displayName = user.displayName,
+                fortId = user.fortId.ifBlank { "@${user.displayName.lowercase().replace(" ", "")}.fort" },
+                avatarEmoji = "🛡️",
+                isExistingConnection = false,
+                hasVerifiedPhone = user.phoneNumber != null,
+                publicKey = user.publicKeys.values.firstOrNull() ?: ""
+            )
+        )
+    }
 
     override suspend fun searchUsers(query: String, mode: SearchMode, requesterUserId: String): Result<List<UserSearchResult>> {
         val trimmed = query.trim()
@@ -453,9 +502,11 @@ class InMemoryRemoteRelay : FortRemoteBackend {
             }
             SearchMode.FORT_ID -> {
                 val cleanFortId = if (trimmed.startsWith("@")) trimmed else "@$trimmed"
+                val baseFortId = cleanFortId.substringBefore(".").lowercase()
                 val match = usersById.values.firstOrNull {
                     it.userId != requesterUserId && (it.fortId.equals(cleanFortId, ignoreCase = true) ||
                         it.fortId.equals(trimmed, ignoreCase = true) ||
+                        it.fortId.substringBefore(".").equals(baseFortId, ignoreCase = true) ||
                         it.userId.equals(trimmed, ignoreCase = true))
                 }
                 if (match != null) {
