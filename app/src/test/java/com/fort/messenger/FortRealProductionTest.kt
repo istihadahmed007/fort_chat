@@ -1,8 +1,10 @@
 package com.fort.messenger
 
+import android.app.Application
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import com.fort.messenger.viewmodel.FortMainViewModel
 import com.fort.messenger.data.local.FortDatabase
 import com.fort.messenger.data.remote.FirebaseRemoteBackend
 import com.fort.messenger.data.remote.InMemoryRemoteRelay
@@ -1610,5 +1612,136 @@ class FortRealProductionTest {
         assertNotNull(cards1)
         assertNotNull(cards2)
         assertNotEquals(user1.userId, user2.userId)
+    }
+
+    @Test
+    fun testOptimisticMessageInsertionAndDeliveryStatusTransition() = runBlocking {
+        val alice = repositoryAlice.register("alice_opt@fort.net", "Secret1!", "Alice Opt").getOrThrow()
+        val bob = repositoryBob.register("bob_opt@fort.net", "Secret2!", "Bob Opt").getOrThrow()
+        val pass = repositoryAlice.generatePass(alice.userId, CardType.PERSONAL, PassDurationType.SEVEN_DAYS).getOrThrow()
+        repositoryBob.claimPass(pass.token, bob.userId, "Bob Opt").getOrThrow()
+        val bobPass = repositoryBob.generatePass(bob.userId, CardType.PERSONAL, PassDurationType.SEVEN_DAYS).getOrThrow()
+        repositoryAlice.claimPass(bobPass.token, alice.userId, "Alice Opt").getOrThrow()
+
+        val convId = "conv_${bob.userId}"
+        val text = "Instant sovereign delivery test"
+        val sendResult = repositoryAlice.sendEncryptedMessage(
+            conversationId = convId,
+            senderUserId = alice.userId,
+            recipientUserId = bob.userId,
+            plaintext = text
+        )
+        assertTrue("Send message must succeed", sendResult.isSuccess)
+
+        // Verify Alice's local database contains the message with status SENT
+        val aliceMessages = repositoryAlice.getConversationMessages(convId).first()
+        assertEquals(1, aliceMessages.size)
+        val aliceMsg = aliceMessages.first()
+        assertEquals(text, aliceMsg.decryptedTextCache)
+        assertEquals("SENT", aliceMsg.deliveryStatus)
+
+        // Bob syncs inbound message
+        val syncedCount = repositoryBob.syncInboundMessages(bob.userId).getOrThrow()
+        assertEquals(1, syncedCount)
+        val serverPackets = serverRelay.fetchPacketsForUser(bob.userId).getOrThrow()
+        val packet = serverPackets.first()
+        serverRelay.updateDeliveryStatus(packet.packetId, "DELIVERED", bob.userId)
+
+        // Alice reconciles outbound packets -> status transitions to DELIVERED
+        val outboundPackets = serverRelay.listenToOutboundPackets(alice.userId).first()
+        assertEquals(1, outboundPackets.size)
+        assertEquals("DELIVERED", outboundPackets.first().deliveryStatus)
+        repositoryAlice.processOutboundPacketUpdates(outboundPackets)
+
+        val updatedAliceMessages = repositoryAlice.getConversationMessages(convId).first()
+        assertEquals("DELIVERED", updatedAliceMessages.first().deliveryStatus)
+    }
+
+    @Test
+    fun testOutboundPacketReactionsAndMessageEditing() = runBlocking {
+        val alice = repositoryAlice.register("alice_react@fort.net", "Secret1!", "Alice React").getOrThrow()
+        val bob = repositoryBob.register("bob_react@fort.net", "Secret2!", "Bob React").getOrThrow()
+        val pass = repositoryAlice.generatePass(alice.userId, CardType.PERSONAL, PassDurationType.SEVEN_DAYS).getOrThrow()
+        repositoryBob.claimPass(pass.token, bob.userId, "Bob React").getOrThrow()
+        val bobPass = repositoryBob.generatePass(bob.userId, CardType.PERSONAL, PassDurationType.SEVEN_DAYS).getOrThrow()
+        repositoryAlice.claimPass(bobPass.token, alice.userId, "Alice React").getOrThrow()
+
+        val convId = "conv_${bob.userId}"
+        repositoryAlice.sendEncryptedMessage(
+            conversationId = convId,
+            senderUserId = alice.userId,
+            recipientUserId = bob.userId,
+            plaintext = "Original message text"
+        ).getOrThrow()
+
+        val msgId = repositoryAlice.getConversationMessages(convId).first().first().messageId
+
+        // Add reaction locally and remotely
+        repositoryAlice.addMessageReaction(msgId, alice.userId, "🔥")
+        val withReaction = repositoryAlice.getConversationMessages(convId).first().first()
+        assertTrue("Local message has reaction", withReaction.reactionsJson.contains("🔥"))
+
+        val outboundPackets = serverRelay.listenToOutboundPackets(alice.userId).first()
+        assertTrue("Outbound packet has reaction", outboundPackets.first().reactionsJson.contains("🔥"))
+
+        // Edit message
+        repositoryAlice.editMessage(msgId, "Corrected message text", alice.userId)
+        val editedMsg = repositoryAlice.getConversationMessages(convId).first().first()
+        assertEquals("Corrected message text", editedMsg.decryptedTextCache)
+        assertTrue("isEdited is true", editedMsg.isEdited)
+    }
+
+    @Test
+    fun testCallMinimizationAndStateFlow() = runBlocking {
+        repositoryAlice.register("alice_call@fort.net", "Password123!", "Alice Call").getOrThrow()
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val viewModel = FortMainViewModel(app, repositoryAlice)
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+
+        // Initiate call
+        viewModel.startCall("peer_bob", "Bob", CallType.AUDIO)
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        val activeCall = viewModel.uiState.value.activeCallSession
+        assertNotNull("Active call is present", activeCall)
+        assertEquals(CallStatus.OUTGOING_RINGING, activeCall?.status)
+        assertFalse("Call starts unminimized", viewModel.uiState.value.isCallMinimized)
+
+        // Minimize call
+        viewModel.minimizeCall()
+        assertTrue("Call is minimized", viewModel.uiState.value.isCallMinimized)
+
+        // Expand call
+        viewModel.expandCall()
+        assertFalse("Call is expanded", viewModel.uiState.value.isCallMinimized)
+
+        // End call resets session and minimized state
+        viewModel.endCall()
+        assertNull("Active call session cleared", viewModel.uiState.value.activeCallSession)
+        assertFalse("Minimized flag reset", viewModel.uiState.value.isCallMinimized)
+    }
+
+    @Test
+    fun testConversationReactiveFlowRoomObservation() = runBlocking {
+        val alice = repositoryAlice.register("alice_flow@fort.net", "Secret1!", "Alice Flow").getOrThrow()
+        val bob = repositoryBob.register("bob_flow@fort.net", "Secret2!", "Bob Flow").getOrThrow()
+        val pass = repositoryAlice.generatePass(alice.userId, CardType.PERSONAL, PassDurationType.SEVEN_DAYS).getOrThrow()
+        repositoryBob.claimPass(pass.token, bob.userId, "Bob Flow").getOrThrow()
+        val bobPass = repositoryBob.generatePass(bob.userId, CardType.PERSONAL, PassDurationType.SEVEN_DAYS).getOrThrow()
+        repositoryAlice.claimPass(bobPass.token, alice.userId, "Alice Flow").getOrThrow()
+
+        // Room database messages flow starts empty
+        val initialMessages = repositoryAlice.getAllMessagesFlow().first()
+        assertEquals(0, initialMessages.size)
+
+        repositoryAlice.sendEncryptedMessage(
+            conversationId = "conv_${bob.userId}",
+            senderUserId = alice.userId,
+            recipientUserId = bob.userId,
+            plaintext = "Room reactivity check"
+        ).getOrThrow()
+
+        val updatedMessages = repositoryAlice.getAllMessagesFlow().first()
+        assertEquals(1, updatedMessages.size)
+        assertEquals("Room reactivity check", updatedMessages.first().decryptedTextCache)
     }
 }

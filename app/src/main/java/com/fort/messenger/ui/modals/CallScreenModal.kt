@@ -7,6 +7,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -14,6 +15,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Videocam
@@ -58,7 +61,8 @@ fun CallScreenModal(
     onToggleSpeaker: () -> Unit,
     onToggleVideo: () -> Unit,
     onSwitchCamera: () -> Unit,
-    onPermissionGranted: () -> Unit = {}
+    onPermissionGranted: () -> Unit = {},
+    onMinimizeCall: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     var callDurationSeconds by remember { mutableLongStateOf(0L) }
@@ -183,11 +187,81 @@ fun CallScreenModal(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 24.dp)
-                    .padding(top = 80.dp, bottom = 48.dp),
+                    .padding(horizontal = 20.dp)
+                    .statusBarsPadding()
+                    .padding(top = 16.dp, bottom = 48.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
+                // Top Action Bar with Minimize Button & E2EE Status
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (onMinimizeCall != null) {
+                        IconButton(
+                            onClick = onMinimizeCall,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF1E293B).copy(alpha = 0.75f))
+                                .border(1.dp, IceBlueBorder.copy(alpha = 0.5f), CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.KeyboardArrowDown,
+                                contentDescription = "Minimize Call",
+                                tint = Color.White,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                    } else {
+                        Spacer(modifier = Modifier.size(48.dp))
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = Color(0xFF1E293B).copy(alpha = 0.75f),
+                        border = androidx.compose.foundation.BorderStroke(0.8.dp, Color(0xFF38BDF8).copy(alpha = 0.4f))
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = EmeraldVerified,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "SOVEREIGN E2EE",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = EmeraldVerified,
+                                letterSpacing = 0.5.sp
+                            )
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = Color(0xFF1E293B).copy(alpha = 0.75f),
+                        border = androidx.compose.foundation.BorderStroke(0.8.dp, Color(0xFF38BDF8).copy(alpha = 0.3f))
+                    ) {
+                        Text(
+                            text = if (session.callType == CallType.VIDEO) "HD VIDEO" else "AUDIO",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFBAE6FD),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+
                 // Peer Details & Call Status
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -243,6 +317,7 @@ fun CallScreenModal(
                                 val secs = callDurationSeconds % 60
                                 String.format("Encrypted Call • %02d:%02d", mins, secs)
                             }
+                            CallStatus.RECONNECTING -> "Reconnecting secure stream..."
                             CallStatus.BUSY -> "Peer busy or unavailable"
                             CallStatus.DECLINED -> "Call declined"
                             CallStatus.ENDED -> "Call ended"
@@ -254,7 +329,11 @@ fun CallScreenModal(
                             text = statusText,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium,
-                            color = if (session.status == CallStatus.CONNECTED) EmeraldVerified else Color(0xFFBAE6FD),
+                            color = when (session.status) {
+                                CallStatus.CONNECTED -> EmeraldVerified
+                                CallStatus.RECONNECTING -> Color(0xFFF59E0B)
+                                else -> Color(0xFFBAE6FD)
+                            },
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
                         )
                     }
@@ -480,6 +559,103 @@ fun CallScreenModal(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun ActiveCallTopBanner(
+    session: CallSession,
+    onExpandCall: () -> Unit,
+    onEndCall: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var durationSeconds by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(session.status) {
+        if (session.status == CallStatus.CONNECTED) {
+            durationSeconds = 0L
+            while (true) {
+                delay(1000L)
+                durationSeconds++
+            }
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .shadow(6.dp, RoundedCornerShape(20.dp), spotColor = Color(0x332563EB))
+            .clip(RoundedCornerShape(20.dp))
+            .background(
+                Brush.horizontalGradient(
+                    listOf(
+                        Color(0xFF0F172A).copy(alpha = 0.95f),
+                        Color(0xFF1E293B).copy(alpha = 0.95f)
+                    )
+                )
+            )
+            .border(1.dp, IceBlueBorder.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
+            .clickable(onClick = onExpandCall)
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                // Pulsing Green or Blue Dot Indicator
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(if (session.status == CallStatus.CONNECTED) EmeraldVerified else Color(0xFF38BDF8))
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Column {
+                    Text(
+                        text = session.peerDisplayName,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    val mins = durationSeconds / 60
+                    val secs = durationSeconds % 60
+                    val durationStr = if (session.status == CallStatus.CONNECTED) {
+                        String.format("%02d:%02d • Return to call", mins, secs)
+                    } else if (session.status == CallStatus.RECONNECTING) {
+                        "Reconnecting • Return to call"
+                    } else {
+                        "Connecting • Return to call"
+                    }
+                    Text(
+                        text = durationStr,
+                        fontSize = 11.5.sp,
+                        color = Color(0xFFBAE6FD)
+                    )
+                }
+            }
+
+            // Quick End Call Button
+            IconButton(
+                onClick = onEndCall,
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFFE11D48))
+            ) {
+                Icon(
+                    imageVector = Icons.Default.CallEnd,
+                    contentDescription = "End Call",
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
             }
         }
     }

@@ -1210,10 +1210,10 @@ fun FortConversationPillComposer(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // 1. (+) Frosted circular attachment button
+        // 1. (+) Frosted circular attachment button (>= 48dp touch target)
         Box(
             modifier = Modifier
-                .size(42.dp)
+                .size(48.dp)
                 .shadow(2.dp, CircleShape, spotColor = Color(0x141E40AF))
                 .clip(CircleShape)
                 .background(if (isDark) Color(0xFF1E293B) else Color.White.copy(alpha = 0.95f))
@@ -1225,7 +1225,7 @@ fun FortConversationPillComposer(
                 imageVector = androidx.compose.material.icons.Icons.Filled.Add,
                 contentDescription = "Attach",
                 tint = if (isDark) Color(0xFF94A3B8) else Color(0xFF475569),
-                modifier = Modifier.size(20.dp)
+                modifier = Modifier.size(22.dp)
             )
         }
 
@@ -1233,9 +1233,9 @@ fun FortConversationPillComposer(
         Box(
             modifier = Modifier
                 .weight(1f)
-                .height(46.dp)
-                .shadow(2.dp, RoundedCornerShape(23.dp), spotColor = Color(0x141E40AF))
-                .clip(RoundedCornerShape(23.dp))
+                .height(48.dp)
+                .shadow(2.dp, RoundedCornerShape(24.dp), spotColor = Color(0x141E40AF))
+                .clip(RoundedCornerShape(24.dp))
                 .background(
                     if (isDark) Color(0xFF131D31).copy(alpha = 0.95f)
                     else Color.White.copy(alpha = 0.95f)
@@ -1243,7 +1243,7 @@ fun FortConversationPillComposer(
                 .border(
                     0.8.dp,
                     if (isDark) Color(0xFF1E3A5F) else Color(0xFFDBEAFE),
-                    RoundedCornerShape(23.dp)
+                    RoundedCornerShape(24.dp)
                 )
                 .padding(start = 14.dp, end = 4.dp),
             contentAlignment = Alignment.CenterStart
@@ -1252,13 +1252,13 @@ fun FortConversationPillComposer(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Text input
+                // Text input with comfortable 15sp font
                 androidx.compose.foundation.text.BasicTextField(
                     value = text,
                     onValueChange = onTextChanged,
                     modifier = Modifier.weight(1f),
                     textStyle = androidx.compose.ui.text.TextStyle(
-                        fontSize = 14.sp,
+                        fontSize = 15.sp,
                         color = if (isDark) com.fort.messenger.ui.theme.TextPrimaryDark else com.fort.messenger.ui.theme.ShowcaseNavyText
                     ),
                     singleLine = true,
@@ -1267,7 +1267,7 @@ fun FortConversationPillComposer(
                         if (text.isEmpty()) {
                             Text(
                                 text = "Message securely...",
-                                fontSize = 13.5.sp,
+                                fontSize = 14.sp,
                                 color = if (isDark) com.fort.messenger.ui.theme.TextMutedDark else Color(0xFF94A3B8)
                             )
                         }
@@ -1278,37 +1278,37 @@ fun FortConversationPillComposer(
                 // Emoji smiley button
                 androidx.compose.material3.IconButton(
                     onClick = onEmojiToggle,
-                    modifier = Modifier.size(34.dp)
+                    modifier = Modifier.size(44.dp)
                 ) {
                     Icon(
                         imageVector = androidx.compose.material.icons.Icons.Outlined.SentimentSatisfied,
                         contentDescription = "Emoji",
                         tint = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B),
-                        modifier = Modifier.size(19.dp)
+                        modifier = Modifier.size(21.dp)
                     )
                 }
 
                 // Mic button
                 androidx.compose.material3.IconButton(
                     onClick = onMic,
-                    modifier = Modifier.size(34.dp)
+                    modifier = Modifier.size(44.dp)
                 ) {
                     Icon(
                         imageVector = androidx.compose.material.icons.Icons.Outlined.Mic,
                         contentDescription = "Voice Message",
                         tint = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B),
-                        modifier = Modifier.size(19.dp)
+                        modifier = Modifier.size(21.dp)
                     )
                 }
             }
         }
 
-        // 3. Right Sky-Blue Squircle Button (Waveform or Send)
+        // 3. Right Sky-Blue Squircle Button (Waveform or Send, >= 48dp touch target)
         Box(
             modifier = Modifier
-                .size(42.dp)
-                .shadow(3.dp, RoundedCornerShape(15.dp), spotColor = Color(0x332563EB))
-                .clip(RoundedCornerShape(15.dp))
+                .size(48.dp)
+                .shadow(3.dp, RoundedCornerShape(16.dp), spotColor = Color(0x332563EB))
+                .clip(RoundedCornerShape(16.dp))
                 .background(
                     if (isDark) Color(0xFF2563EB)
                     else Color(0xFF7DD3FC)
@@ -1323,14 +1323,14 @@ fun FortConversationPillComposer(
                     imageVector = Icons.Filled.Send,
                     contentDescription = "Send",
                     tint = Color.White,
-                    modifier = Modifier.size(17.dp)
+                    modifier = Modifier.size(20.dp)
                 )
             } else {
                 Icon(
                     imageVector = androidx.compose.material.icons.Icons.Outlined.GraphicEq,
                     contentDescription = "Voice Note Waveform",
                     tint = Color.White,
-                    modifier = Modifier.size(21.dp)
+                    modifier = Modifier.size(22.dp)
                 )
             }
         }

@@ -36,7 +36,11 @@ data class RemoteEncryptedPacket(
     val senderSignatureBase64: String = "",
     val timestamp: Long,
     val senderCardType: String = "PERSONAL",
-    val recipientCardType: String = "PERSONAL"
+    val recipientCardType: String = "PERSONAL",
+    val deliveryStatus: String = "SENT",
+    val reactionsJson: String = "{}",
+    val isEdited: Boolean = false,
+    val isDeleted: Boolean = false
 )
 
 data class RemotePassRecord(
@@ -109,9 +113,13 @@ interface FortRemoteBackend {
 
     // --- Messaging & Knock First Real-Time Sync ---
     fun listenToInboundPackets(recipientUserId: String): Flow<List<RemoteEncryptedPacket>>
+    fun listenToOutboundPackets(senderUserId: String): Flow<List<RemoteEncryptedPacket>>
     fun listenToInboundKnockFirstRequests(recipientUserId: String): Flow<List<KnockFirstRequestEntity>>
     fun listenToOutboundKnockFirstRequests(senderUserId: String): Flow<List<KnockFirstRequestEntity>>
     fun listenToMessageDeliveryStatus(messageId: String): Flow<String>
+    suspend fun updateMessageReactionsRemote(messageId: String, reactionsJson: String, callerUserId: String): Result<Unit>
+    suspend fun editMessageRemote(messageId: String, newCiphertext: String, newIv: String, newSignature: String, callerUserId: String): Result<Unit>
+    suspend fun deleteMessageRemote(messageId: String, callerUserId: String): Result<Unit>
 
     // --- Knock First Server Sync ---
     suspend fun submitKnockFirstRequest(request: KnockFirstRequestEntity): Result<Unit>
@@ -346,6 +354,7 @@ class InMemoryRemoteRelay : FortRemoteBackend {
         }
         packets.add(packet)
         inboundPacketFlows[packet.recipientUserId]?.value = packets.filter { it.recipientUserId == packet.recipientUserId }
+        outboundPacketFlows[packet.senderUserId]?.value = packets.filter { it.senderUserId == packet.senderUserId }
         return Result.success(Unit)
     }
 
@@ -454,6 +463,7 @@ class InMemoryRemoteRelay : FortRemoteBackend {
     private val candidateFlows = ConcurrentHashMap<String, MutableStateFlow<List<RtcIceCandidateRecord>>>()
     private val typingFlows = ConcurrentHashMap<Pair<String, String>, MutableStateFlow<Boolean>>()
     private val inboundPacketFlows = ConcurrentHashMap<String, MutableStateFlow<List<RemoteEncryptedPacket>>>()
+    private val outboundPacketFlows = ConcurrentHashMap<String, MutableStateFlow<List<RemoteEncryptedPacket>>>()
     private val inboundKnockFlows = ConcurrentHashMap<String, MutableStateFlow<List<KnockFirstRequestEntity>>>()
     private val outboundKnockFlows = ConcurrentHashMap<String, MutableStateFlow<List<KnockFirstRequestEntity>>>()
     private val deliveryStatusFlows = ConcurrentHashMap<String, MutableStateFlow<String>>()
@@ -472,6 +482,14 @@ class InMemoryRemoteRelay : FortRemoteBackend {
     }
 
     override suspend fun updateDeliveryStatus(messageId: String, status: String, recipientUserId: String): Result<Unit> {
+        val idx = packets.indexOfFirst { it.packetId == messageId }
+        if (idx != -1) {
+            val old = packets[idx]
+            val updated = old.copy(deliveryStatus = status)
+            packets[idx] = updated
+            outboundPacketFlows[old.senderUserId]?.value = packets.filter { it.senderUserId == old.senderUserId }
+            inboundPacketFlows[old.recipientUserId]?.value = packets.filter { it.recipientUserId == old.recipientUserId }
+        }
         deliveryStatusFlows[messageId]?.value = status
         return Result.success(Unit)
     }
@@ -481,6 +499,49 @@ class InMemoryRemoteRelay : FortRemoteBackend {
             MutableStateFlow(packets.filter { it.recipientUserId == recipientUserId })
         }
         return flow.asStateFlow()
+    }
+
+    override fun listenToOutboundPackets(senderUserId: String): Flow<List<RemoteEncryptedPacket>> {
+        val flow = outboundPacketFlows.computeIfAbsent(senderUserId) {
+            MutableStateFlow(packets.filter { it.senderUserId == senderUserId })
+        }
+        return flow.asStateFlow()
+    }
+
+    override suspend fun updateMessageReactionsRemote(messageId: String, reactionsJson: String, callerUserId: String): Result<Unit> {
+        val idx = packets.indexOfFirst { it.packetId == messageId }
+        if (idx != -1) {
+            val old = packets[idx]
+            val updated = old.copy(reactionsJson = reactionsJson)
+            packets[idx] = updated
+            outboundPacketFlows[old.senderUserId]?.value = packets.filter { it.senderUserId == old.senderUserId }
+            inboundPacketFlows[old.recipientUserId]?.value = packets.filter { it.recipientUserId == old.recipientUserId }
+        }
+        return Result.success(Unit)
+    }
+
+    override suspend fun editMessageRemote(messageId: String, newCiphertext: String, newIv: String, newSignature: String, callerUserId: String): Result<Unit> {
+        val idx = packets.indexOfFirst { it.packetId == messageId }
+        if (idx != -1) {
+            val old = packets[idx]
+            val updated = old.copy(ciphertextBase64 = newCiphertext, ivBase64 = newIv, senderSignatureBase64 = newSignature, isEdited = true)
+            packets[idx] = updated
+            outboundPacketFlows[old.senderUserId]?.value = packets.filter { it.senderUserId == old.senderUserId }
+            inboundPacketFlows[old.recipientUserId]?.value = packets.filter { it.recipientUserId == old.recipientUserId }
+        }
+        return Result.success(Unit)
+    }
+
+    override suspend fun deleteMessageRemote(messageId: String, callerUserId: String): Result<Unit> {
+        val idx = packets.indexOfFirst { it.packetId == messageId }
+        if (idx != -1) {
+            val old = packets[idx]
+            val updated = old.copy(isDeleted = true)
+            packets[idx] = updated
+            outboundPacketFlows[old.senderUserId]?.value = packets.filter { it.senderUserId == old.senderUserId }
+            inboundPacketFlows[old.recipientUserId]?.value = packets.filter { it.recipientUserId == old.recipientUserId }
+        }
+        return Result.success(Unit)
     }
 
     override fun listenToInboundKnockFirstRequests(recipientUserId: String): Flow<List<KnockFirstRequestEntity>> {

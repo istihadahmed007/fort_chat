@@ -131,6 +131,9 @@ interface PrivateRoomDao {
 
 @Dao
 interface ChatMessageDao {
+    @Query("SELECT * FROM chat_messages ORDER BY timestamp ASC")
+    fun getAllMessagesFlow(): Flow<List<ChatMessageEntity>>
+
     @Query("SELECT * FROM chat_messages WHERE conversationId = :conversationId ORDER BY timestamp ASC")
     fun getMessagesForConversation(conversationId: String): Flow<List<ChatMessageEntity>>
 
@@ -155,8 +158,8 @@ interface ChatMessageDao {
     @Query("UPDATE chat_messages SET reactionsJson = :reactionsJson WHERE messageId = :messageId")
     suspend fun updateMessageReactions(messageId: String, reactionsJson: String)
 
-    @Query("UPDATE chat_messages SET encryptedLocalPayload = :newPayload, isEdited = 1 WHERE messageId = :messageId")
-    suspend fun editMessageContent(messageId: String, newPayload: String)
+    @Query("UPDATE chat_messages SET encryptedLocalPayload = :newPayload, decryptedTextCache = :newText, isEdited = 1 WHERE messageId = :messageId")
+    suspend fun editMessageContent(messageId: String, newPayload: String, newText: String)
 
     @Query("UPDATE chat_messages SET isDeleted = 1 WHERE messageId = :messageId")
     suspend fun markMessageDeleted(messageId: String)

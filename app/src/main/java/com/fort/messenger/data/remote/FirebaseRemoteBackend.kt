@@ -715,6 +715,61 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
         awaitClose { registration.remove() }
     }
 
+    override fun listenToOutboundPackets(senderUserId: String): Flow<List<RemoteEncryptedPacket>> = callbackFlow {
+        val registration = firestore.collection("messages")
+            .whereEqualTo("senderUserId", senderUserId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    close(error)
+                    return@addSnapshotListener
+                }
+                val packets = snapshot?.documents?.mapNotNull { it.toEncryptedPacketOrNull() } ?: emptyList()
+                trySend(packets)
+            }
+        awaitClose { registration.remove() }
+    }
+
+    override suspend fun updateMessageReactionsRemote(
+        messageId: String,
+        reactionsJson: String,
+        callerUserId: String
+    ): Result<Unit> = capture {
+        requireCaller(callerUserId)
+        firestore.collection("messages").document(messageId)
+            .update("reactionsJson", reactionsJson).await()
+        Unit
+    }
+
+    override suspend fun editMessageRemote(
+        messageId: String,
+        newCiphertext: String,
+        newIv: String,
+        newSignature: String,
+        callerUserId: String
+    ): Result<Unit> = capture {
+        requireCaller(callerUserId)
+        firestore.collection("messages").document(messageId)
+            .update(
+                mapOf(
+                    "ciphertextBase64" to newCiphertext,
+                    "ivBase64" to newIv,
+                    "senderSignatureBase64" to newSignature,
+                    "isEdited" to true
+                )
+            ).await()
+        Unit
+    }
+
+    override suspend fun deleteMessageRemote(
+        messageId: String,
+        callerUserId: String
+    ): Result<Unit> = capture {
+        requireCaller(callerUserId)
+        firestore.collection("messages").document(messageId)
+            .update("isDeleted", true).await()
+        Unit
+    }
+
     override fun listenToInboundKnockFirstRequests(recipientUserId: String): Flow<List<KnockFirstRequestEntity>> = callbackFlow {
         val registration = firestore.collection("knock_first")
             .whereEqualTo("recipientUserId", recipientUserId)
@@ -1141,7 +1196,11 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
         "senderSignatureBase64" to senderSignatureBase64,
         "timestamp" to timestamp,
         "senderCardType" to senderCardType,
-        "recipientCardType" to recipientCardType
+        "recipientCardType" to recipientCardType,
+        "deliveryStatus" to deliveryStatus,
+        "reactionsJson" to reactionsJson,
+        "isEdited" to isEdited,
+        "isDeleted" to isDeleted
     )
 
     private fun DocumentSnapshot.toEncryptedPacketOrNull(): RemoteEncryptedPacket? {
@@ -1161,7 +1220,11 @@ class FirebaseRemoteBackend(context: Context) : FortRemoteBackend {
             senderSignatureBase64 = data["senderSignatureBase64"] as? String ?: "",
             timestamp = (data["timestamp"] as? Number)?.toLong() ?: 0L,
             senderCardType = data["senderCardType"] as? String ?: "PERSONAL",
-            recipientCardType = data["recipientCardType"] as? String ?: "PERSONAL"
+            recipientCardType = data["recipientCardType"] as? String ?: "PERSONAL",
+            deliveryStatus = data["deliveryStatus"] as? String ?: "SENT",
+            reactionsJson = data["reactionsJson"] as? String ?: "{}",
+            isEdited = data["isEdited"] as? Boolean ?: false,
+            isDeleted = data["isDeleted"] as? Boolean ?: false
         )
     }
 

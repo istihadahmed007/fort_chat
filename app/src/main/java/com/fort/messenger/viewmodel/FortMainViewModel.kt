@@ -2,10 +2,18 @@ package com.fort.messenger.viewmodel
 
 import android.app.Activity
 import android.app.Application
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
+import android.os.Build
+import androidx.core.app.NotificationCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.fort.messenger.MainActivity
 import com.fort.messenger.data.local.*
 import com.fort.messenger.data.remote.FortBackendFactory
 import com.fort.messenger.data.remote.RemoteUserAccount
@@ -95,6 +103,7 @@ data class FortUiState(
     // WebRTC Calls
     val activeCallSession: CallSession? = null,
     val incomingCallSession: CallSession? = null,
+    val isCallMinimized: Boolean = false,
     // Location Sharing
     val isLocationShareModalOpen: Boolean = false,
     val activeLiveLocation: LiveLocationSession? = null,
@@ -128,6 +137,7 @@ class FortMainViewModel @JvmOverloads constructor(
     private var iceCandidatesJob: kotlinx.coroutines.Job? = null
     private var typingListenerJob: kotlinx.coroutines.Job? = null
     private var realtimePacketsJob: kotlinx.coroutines.Job? = null
+    private var realtimeOutboundJob: kotlinx.coroutines.Job? = null
     private var realtimeInboundKnockJob: kotlinx.coroutines.Job? = null
     private var realtimeOutboundKnockJob: kotlinx.coroutines.Job? = null
     private var searchJob: kotlinx.coroutines.Job? = null
@@ -225,14 +235,16 @@ class FortMainViewModel @JvmOverloads constructor(
             }
         }
 
-        // 3. Observe Peer Connections & Private Rooms to Build Unified Conversation Feed
+        // 3. Observe Peer Connections, Rooms, and Messages to Build Fully Reactive Live Conversation Feed
         viewModelScope.launch {
             combine(
                 repository.getActiveConnections(userId),
-                repository.getActiveRooms()
-            ) { connections, rooms ->
-                Pair(connections, rooms)
-            }.collect { (connections, rooms) ->
+                repository.getActiveRooms(),
+                repository.getAllMessagesFlow()
+            ) { connections, rooms, allMessages ->
+                Triple(connections, rooms, allMessages)
+            }.collect { (connections, rooms, allMessages) ->
+                val messagesByConv = allMessages.groupBy { it.conversationId }
                 val directConvs = connections.map { conn ->
                     val passRemaining = if (conn.passExpiresAt == Long.MAX_VALUE) {
                         "Ongoing"
@@ -242,7 +254,7 @@ class FortMainViewModel @JvmOverloads constructor(
                     }
 
                     val convId = "conv_${conn.peerUserId}"
-                    val messages = repository.getConversationMessages(convId).firstOrNull() ?: emptyList()
+                    val messages = messagesByConv[convId] ?: emptyList()
                     val lastMsgObj = messages.lastOrNull()
                     val unreadCount = messages.count { !it.isMine && it.deliveryStatus != "READ" }
                     val lastTime = lastMsgObj?.let { formatTimestamp(it.timestamp) } ?: "Recent"
@@ -312,7 +324,7 @@ class FortMainViewModel @JvmOverloads constructor(
 
                 val roomConvs = rooms.map { r ->
                     val roomConvId = "room_${r.roomId}"
-                    val messages = repository.getConversationMessages(roomConvId).firstOrNull() ?: emptyList()
+                    val messages = messagesByConv[roomConvId] ?: emptyList()
                     val lastMsgObj = messages.lastOrNull()
                     val unreadCount = messages.count { !it.isMine && it.deliveryStatus != "READ" }
                     val lastTime = lastMsgObj?.let { formatTimestamp(it.timestamp) } ?: "Active"
@@ -465,11 +477,23 @@ class FortMainViewModel @JvmOverloads constructor(
             repository.retryPendingOutbox()
         }
 
-        // 8. Real-time Inbound Encrypted Messages
+        // 8. Real-time Inbound Encrypted Messages with Instant Notification Dispatch
         realtimePacketsJob?.cancel()
         realtimePacketsJob = viewModelScope.launch {
             repository.listenToInboundPackets(userId).collect { packets ->
-                repository.processInboundPackets(packets, userId)
+                repository.processInboundPackets(packets, userId) { peerName, previewText, convId ->
+                    if (_uiState.value.currentOpenChatId != convId) {
+                        showInboundMessageNotification(peerName, previewText, convId)
+                    }
+                }
+            }
+        }
+
+        // 8b. Real-time Outbound Packet Status Updates (Delivered, Read, Remote Reactions, Edits)
+        realtimeOutboundJob?.cancel()
+        realtimeOutboundJob = viewModelScope.launch {
+            repository.listenToOutboundPackets(userId).collect { packets ->
+                repository.processOutboundPacketUpdates(packets)
             }
         }
 
@@ -1116,7 +1140,6 @@ class FortMainViewModel @JvmOverloads constructor(
     }
 
     fun startCall(peerUserId: String, peerDisplayName: String, callType: CallType) {
-        val user = _uiState.value.currentUserAccount ?: return
         val callId = "call_${UUID.randomUUID()}"
         val session = CallSession(
             callId = callId,
@@ -1128,7 +1151,8 @@ class FortMainViewModel @JvmOverloads constructor(
         )
         _uiState.update { it.copy(activeCallSession = session) }
 
-        if (hasRequiredCallPermissions(callType)) {
+        val user = _uiState.value.currentUserAccount
+        if (user != null && hasRequiredCallPermissions(callType)) {
             launchOutgoingCallWithPermissions(session)
         }
         // If permissions missing, CallScreenModal requests them and invokes onCallPermissionsGranted()
@@ -1236,7 +1260,15 @@ class FortMainViewModel @JvmOverloads constructor(
             }
         }
         teardownWebRtc()
-        _uiState.update { it.copy(activeCallSession = null, incomingCallSession = null) }
+        _uiState.update { it.copy(activeCallSession = null, incomingCallSession = null, isCallMinimized = false) }
+    }
+
+    fun minimizeCall() {
+        _uiState.update { it.copy(isCallMinimized = true) }
+    }
+
+    fun expandCall() {
+        _uiState.update { it.copy(isCallMinimized = false) }
     }
 
     fun toggleMute() {
@@ -1625,15 +1657,17 @@ class FortMainViewModel @JvmOverloads constructor(
 
     fun editMessage(messageId: String, newText: String) {
         if (newText.isBlank()) return
+        val user = _uiState.value.currentUserAccount ?: return
         viewModelScope.launch {
-            repository.editMessage(messageId, newText)
+            repository.editMessage(messageId, newText, user.userId)
             _uiState.update { it.copy(toastMessage = "Message updated.") }
         }
     }
 
     fun deleteMessage(messageId: String) {
+        val user = _uiState.value.currentUserAccount ?: return
         viewModelScope.launch {
-            repository.deleteMessage(messageId)
+            repository.deleteMessage(messageId, user.userId)
             _uiState.update { it.copy(toastMessage = "Message deleted.") }
         }
     }
@@ -1869,6 +1903,52 @@ class FortMainViewModel @JvmOverloads constructor(
     }
 
     fun clearToast() = _uiState.update { it.copy(toastMessage = null) }
+
+    private fun showInboundMessageNotification(peerName: String, previewText: String, conversationId: String) {
+        try {
+            val context = getApplication<Application>()
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = NotificationChannel(
+                    "fort_messages_channel",
+                    "Fort Secure Messages",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "End-to-end encrypted Fort incoming messages"
+                    enableLights(true)
+                    enableVibration(true)
+                }
+                notificationManager.createNotificationChannel(channel)
+            }
+
+            val redact = _uiState.value.currentUserAccount?.redactNotifications ?: true
+            val title = if (redact) "Fort Sovereign Message" else peerName
+            val text = if (redact) "New encrypted message received • Sovereign Enclave" else previewText
+
+            val intent = Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra("OPEN_CONVERSATION_ID", conversationId)
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                context,
+                conversationId.hashCode(),
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val notification = NotificationCompat.Builder(context, "fort_messages_channel")
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
+                .build()
+
+            notificationManager.notify(conversationId.hashCode(), notification)
+        } catch (_: Exception) {}
+    }
 
     companion object {
         fun formatTimestamp(millis: Long): String {

@@ -164,42 +164,17 @@ fun ConversationScreen(
                         OutlinedTextField(
                             value = searchQuery,
                             onValueChange = { searchQuery = it },
-                            placeholder = { Text("Search encrypted messages...", fontSize = 12.sp) },
+                            placeholder = { Text("Search encrypted messages...", fontSize = 13.sp) },
                             singleLine = true,
                             trailingIcon = {
                                 if (searchQuery.isNotEmpty()) {
                                     IconButton(onClick = { searchQuery = "" }) {
-                                        Icon(Icons.Default.Close, contentDescription = "Clear", modifier = Modifier.size(16.dp))
+                                        Icon(Icons.Default.Close, contentDescription = "Clear", modifier = Modifier.size(18.dp))
                                     }
                                 }
                             },
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(10.dp)
-                        )
-                    }
-                }
-
-                // In-Conversation Search Bar
-                AnimatedVisibility(visible = isSearchActive) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 6.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = searchQuery,
-                            onValueChange = { searchQuery = it },
-                            placeholder = { Text("Search encrypted messages...", fontSize = 12.sp) },
-                            singleLine = true,
-                            trailingIcon = {
-                                if (searchQuery.isNotEmpty()) {
-                                    IconButton(onClick = { searchQuery = "" }) {
-                                        Icon(Icons.Default.Close, contentDescription = "Clear", modifier = Modifier.size(16.dp))
-                                    }
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(10.dp)
+                            shape = RoundedCornerShape(12.dp)
                         )
                     }
                 }
@@ -524,7 +499,7 @@ fun ConversationScreen(
                 Column {
                     // Reactions Row
                     Text("Reactions", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly
@@ -532,7 +507,7 @@ fun ConversationScreen(
                         listOf("❤️", "👍", "😂", "😮", "😢", "🛡️").forEach { emoji ->
                             Box(
                                 modifier = Modifier
-                                    .size(38.dp)
+                                    .size(44.dp)
                                     .clip(CircleShape)
                                     .background(Color(0xFFEFF6FF))
                                     .clickable {
@@ -541,7 +516,7 @@ fun ConversationScreen(
                                     },
                                 contentAlignment = Alignment.Center
                             ) {
-                                Text(emoji, fontSize = 18.sp)
+                                Text(emoji, fontSize = 20.sp)
                             }
                         }
                     }
@@ -557,12 +532,12 @@ fun ConversationScreen(
                                 viewModel.setReplyingTo(msg)
                                 selectedMessageForActions = null
                             }
-                            .padding(8.dp),
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Outlined.Reply, contentDescription = null, tint = RoyalBluePrimary, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text("Quote / Reply", fontSize = 13.sp)
+                        Icon(Icons.Outlined.Reply, contentDescription = null, tint = RoyalBluePrimary, modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("Quote / Reply", fontSize = 14.sp)
                     }
 
                     // Edit Action (If user's own message and not deleted)
@@ -575,12 +550,12 @@ fun ConversationScreen(
                                     editingText = msg.text
                                     showEditDialog = true
                                 }
-                                .padding(8.dp),
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Outlined.Edit, contentDescription = null, tint = RoyalBluePrimary, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Text("Edit Message", fontSize = 13.sp)
+                            Icon(Icons.Outlined.Edit, contentDescription = null, tint = RoyalBluePrimary, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text("Edit Message", fontSize = 14.sp)
                         }
 
                         // Delete Action
@@ -592,12 +567,12 @@ fun ConversationScreen(
                                     viewModel.deleteMessage(msg.id)
                                     selectedMessageForActions = null
                                 }
-                                .padding(8.dp),
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Outlined.Delete, contentDescription = null, tint = RoseDestructive, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Text("Delete Message", color = RoseDestructive, fontSize = 13.sp)
+                            Icon(Icons.Outlined.Delete, contentDescription = null, tint = RoseDestructive, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text("Delete Message", color = RoseDestructive, fontSize = 14.sp)
                         }
                     }
                 }
@@ -879,15 +854,15 @@ fun ChatMessageBubble(
 
                 Text(
                     text = message.text,
-                    fontSize = 14.sp,
+                    fontSize = 15.sp,
                     color = textColor,
-                    lineHeight = 20.sp
+                    lineHeight = 21.sp
                 )
 
                 if (message.isEdited) {
                     Text(
                         text = "(edited)",
-                        fontSize = 9.sp,
+                        fontSize = 10.sp,
                         color = timeColor,
                         modifier = Modifier.padding(top = 2.dp)
                     )
@@ -901,7 +876,7 @@ fun ChatMessageBubble(
                 ) {
                     Text(
                         text = message.timestamp,
-                        fontSize = 10.sp,
+                        fontSize = 11.sp,
                         color = timeColor
                     )
                     if (isMine) {
@@ -911,31 +886,31 @@ fun ChatMessageBubble(
                                 imageVector = Icons.Outlined.Schedule,
                                 contentDescription = "Queued",
                                 tint = timeColor,
-                                modifier = Modifier.size(12.dp)
+                                modifier = Modifier.size(13.dp)
                             )
                             "SENT" -> Icon(
                                 imageVector = Icons.Outlined.Check,
                                 contentDescription = "Sent",
                                 tint = timeColor,
-                                modifier = Modifier.size(12.dp)
+                                modifier = Modifier.size(13.dp)
                             )
                             "DELIVERED" -> Icon(
                                 imageVector = Icons.Outlined.DoneAll,
                                 contentDescription = "Delivered",
                                 tint = timeColor,
-                                modifier = Modifier.size(12.dp)
+                                modifier = Modifier.size(14.dp)
                             )
                             "READ" -> Icon(
                                 imageVector = Icons.Outlined.DoneAll,
                                 contentDescription = "Read",
                                 tint = if (isDark) Color(0xFF60A5FA) else Color(0xFF2563EB),
-                                modifier = Modifier.size(13.dp)
+                                modifier = Modifier.size(14.dp)
                             )
                             else -> Icon(
                                 imageVector = Icons.Outlined.ErrorOutline,
                                 contentDescription = "Failed",
                                 tint = RoseDestructive,
-                                modifier = Modifier.size(12.dp)
+                                modifier = Modifier.size(13.dp)
                             )
                         }
                     }
@@ -945,7 +920,7 @@ fun ChatMessageBubble(
 
         // Reaction chips below message bubble
         if (message.reactions.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(3.dp))
+            Spacer(modifier = Modifier.height(4.dp))
             Row(
                 horizontalArrangement = if (isMine) Arrangement.End else Arrangement.Start,
                 modifier = Modifier.padding(horizontal = 4.dp)
@@ -959,11 +934,11 @@ fun ChatMessageBubble(
                             .background(if (isDark) Color(0xFF1E293B) else Color.White)
                             .border(0.5.dp, if (isDark) Color(0xFF334155) else Color(0xFFE2E8F0), RoundedCornerShape(12.dp))
                             .clickable { onReactionClick(emoji) }
-                            .padding(horizontal = 7.dp, vertical = 2.5.dp)
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
                         Text(
                             text = if (count > 1) "$emoji $count" else emoji,
-                            fontSize = 12.sp,
+                            fontSize = 12.5.sp,
                             fontWeight = FontWeight.Medium
                         )
                     }

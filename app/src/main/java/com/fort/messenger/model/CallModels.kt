@@ -11,6 +11,7 @@ enum class CallStatus {
     INCOMING_RINGING,
     CONNECTING,
     CONNECTED,
+    RECONNECTING,
     ENDED,
     DECLINED,
     BUSY,

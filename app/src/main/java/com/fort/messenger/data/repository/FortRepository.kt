@@ -715,6 +715,9 @@ class FortRepository(
 
     // --- End-to-End Encrypted Messaging ---
 
+    fun getAllMessagesFlow(): Flow<List<ChatMessageEntity>> =
+        database.chatMessageDao().getAllMessagesFlow()
+
     fun getConversationMessages(conversationId: String): Flow<List<ChatMessageEntity>> =
         database.chatMessageDao().getMessagesForConversation(conversationId)
 
@@ -777,23 +780,6 @@ class FortRepository(
         val messageId = "msg_${UUID.randomUUID()}"
         val now = System.currentTimeMillis()
 
-        // Transmit only ciphertext payload and sender signature to server relay, with persona card type metadata
-        val packet = RemoteEncryptedPacket(
-            packetId = messageId,
-            senderUserId = senderUserId,
-            recipientUserId = recipientUserId,
-            ciphertextBase64 = payload.ciphertextBase64,
-            ivBase64 = payload.ivBase64,
-            ephemeralKeyBase64 = payload.ephemeralPublicKeyBase64,
-            senderSignatureBase64 = payload.senderSignatureBase64,
-            timestamp = now,
-            senderCardType = senderCard.type.name,
-            recipientCardType = recipientCardType
-        )
-
-        val transmitResult = remoteBackend.sendEncryptedPacket(packet)
-        val initialStatus = if (transmitResult.isSuccess) "SENT" else "PENDING"
-
         // Protect message body at rest using local Keystore master key
         val encLocalText = keyStoreMaster.encryptLocalData(plaintext)
 
@@ -811,7 +797,7 @@ class FortRepository(
             timestamp = now,
             isMine = true,
             isScrubbedMedia = isScrubbedMedia,
-            deliveryStatus = initialStatus,
+            deliveryStatus = "PENDING", // Optimistic immediate insert: visible in UI <2ms
             replyToMessageId = replyToMessageId,
             replyToSenderName = replyToSenderName,
             replyToText = replyToText,
@@ -821,23 +807,75 @@ class FortRepository(
             attachmentName = attachmentName,
             attachmentSize = attachmentSize
         )
+        // 1. Immediate optimistic Room insert (triggers getAllMessagesFlow instant emit)
         database.chatMessageDao().insertMessage(localEntity)
 
-        return if (transmitResult.isSuccess) Result.success(localEntity) else Result.failure(transmitResult.exceptionOrNull() ?: Exception("Queued offline"))
+        // 2. Dispatch to server relay
+        val packet = RemoteEncryptedPacket(
+            packetId = messageId,
+            senderUserId = senderUserId,
+            recipientUserId = recipientUserId,
+            ciphertextBase64 = payload.ciphertextBase64,
+            ivBase64 = payload.ivBase64,
+            ephemeralKeyBase64 = payload.ephemeralPublicKeyBase64,
+            senderSignatureBase64 = payload.senderSignatureBase64,
+            timestamp = now,
+            senderCardType = senderCard.type.name,
+            recipientCardType = recipientCardType,
+            deliveryStatus = "SENT"
+        )
+
+        val transmitResult = remoteBackend.sendEncryptedPacket(packet)
+        if (transmitResult.isSuccess) {
+            database.chatMessageDao().updateDeliveryStatus(messageId, "SENT")
+            return Result.success(localEntity.copy(deliveryStatus = "SENT"))
+        } else {
+            // Keep in local Room database as PENDING (for outbox retry), but return failure so caller knows transmit failed
+            return Result.failure(transmitResult.exceptionOrNull() ?: Exception("Failed to transmit packet."))
+        }
     }
 
     fun listenToInboundPackets(recipientUserId: String): Flow<List<RemoteEncryptedPacket>> {
         return remoteBackend.listenToInboundPackets(recipientUserId)
     }
 
-    suspend fun processInboundPackets(packets: List<RemoteEncryptedPacket>, currentUserId: String): Int {
+    fun listenToOutboundPackets(senderUserId: String): Flow<List<RemoteEncryptedPacket>> {
+        return remoteBackend.listenToOutboundPackets(senderUserId)
+    }
+
+    suspend fun processOutboundPacketUpdates(packets: List<RemoteEncryptedPacket>) {
+        for (packet in packets) {
+            val local = database.chatMessageDao().getMessageById(packet.packetId) ?: continue
+            if (local.isMine) {
+                if (packet.deliveryStatus.isNotBlank() && packet.deliveryStatus != local.deliveryStatus) {
+                    database.chatMessageDao().updateDeliveryStatus(packet.packetId, packet.deliveryStatus)
+                }
+                if (packet.reactionsJson.isNotBlank() && packet.reactionsJson != local.reactionsJson) {
+                    database.chatMessageDao().updateMessageReactions(packet.packetId, packet.reactionsJson)
+                }
+            }
+        }
+    }
+
+    suspend fun processInboundPackets(
+        packets: List<RemoteEncryptedPacket>,
+        currentUserId: String,
+        onNewMessage: ((peerName: String, text: String, convId: String) -> Unit)? = null
+    ): Int {
         var decryptedCount = 0
         val allCards = database.personaCardDao().getCardsForUserOnce(currentUserId)
         if (allCards.isEmpty()) return 0
 
         for (packet in packets) {
-            // Idempotency: skip if already in local Room database
-            if (database.chatMessageDao().getMessageById(packet.packetId) != null) {
+            // Idempotency: reconcile existing message reactions/deletions if already present
+            val existing = database.chatMessageDao().getMessageById(packet.packetId)
+            if (existing != null) {
+                if (packet.reactionsJson.isNotBlank() && packet.reactionsJson != existing.reactionsJson) {
+                    database.chatMessageDao().updateMessageReactions(packet.packetId, packet.reactionsJson)
+                }
+                if (packet.isDeleted && !existing.isDeleted) {
+                    database.chatMessageDao().markMessageDeleted(packet.packetId)
+                }
                 continue
             }
 
@@ -859,19 +897,23 @@ class FortRepository(
                 val senderPubKey = senderConn?.peerPublicKey?.takeIf { it.isNotBlank() }
                     ?: remoteBackend.fetchPublicKey(packet.senderUserId, senderCardTypeStr).getOrNull()
 
+                val peerProfile = if (senderConn == null && senderPubKey != null) {
+                    remoteBackend.fetchUserProfile(packet.senderUserId).getOrNull()
+                } else null
+
+                val peerDisplayName = senderConn?.peerDisplayName ?: peerProfile?.displayName ?: "Pass Peer"
+
                 if (senderConn == null && senderPubKey != null) {
                     val safetyNumber = FortCryptoManager.computeSafetyNumber(
                         recipientCard.publicKey,
                         senderPubKey
                     )
-                    val peerProfile = remoteBackend.fetchUserProfile(packet.senderUserId).getOrNull()
-                    val peerName = peerProfile?.displayName ?: "Pass Peer"
                     val parsedSenderCardType = try { CardType.valueOf(senderCardTypeStr) } catch (_: Exception) { CardType.PERSONAL }
                     val autoConnection = PeerConnectionEntity(
                         connectionId = "conn_${UUID.randomUUID()}",
                         userId = currentUserId,
                         peerUserId = packet.senderUserId,
-                        peerDisplayName = peerName,
+                        peerDisplayName = peerDisplayName,
                         peerHandle = peerProfile?.fortId ?: "@peer.${packet.senderUserId.takeLast(6)}",
                         peerCardType = parsedSenderCardType,
                         peerPublicKey = senderPubKey,
@@ -918,6 +960,8 @@ class FortRepository(
                 database.chatMessageDao().insertMessage(localEntity)
                 remoteBackend.updateDeliveryStatus(packet.packetId, "DELIVERED", currentUserId)
                 decryptedCount++
+
+                onNewMessage?.invoke(peerDisplayName, decrypted, conversationId)
             } catch (_: Exception) {
                 // Ciphertext tampering or invalid signature fails closed
             }
@@ -978,18 +1022,37 @@ class FortRepository(
         } else {
             json.remove(emoji)
         }
-        database.chatMessageDao().updateMessageReactions(messageId, json.toString())
+        val updatedReactions = json.toString()
+        database.chatMessageDao().updateMessageReactions(messageId, updatedReactions)
+        remoteBackend.updateMessageReactionsRemote(messageId, updatedReactions, currentUserId)
         return Result.success(Unit)
     }
 
-    suspend fun editMessage(messageId: String, newText: String): Result<Unit> {
+    suspend fun editMessage(messageId: String, newText: String, currentUserId: String = ""): Result<Unit> {
+        val msg = database.chatMessageDao().getMessageById(messageId) ?: return Result.failure(IllegalArgumentException("Message not found."))
         val enc = keyStoreMaster.encryptLocalData(newText)
-        database.chatMessageDao().editMessageContent(messageId, enc)
+        database.chatMessageDao().editMessageContent(messageId, enc, newText)
+        if (msg.isMine && currentUserId.isNotBlank()) {
+            val peerConn = database.peerConnectionDao().getConnectionWithPeer(currentUserId, msg.recipientUserId)
+            val recipientPubKey = peerConn?.peerPublicKey ?: ""
+            val userAccount = database.userAccountDao().getActiveAccountOnce()
+            val userCard = userAccount?.let { database.personaCardDao().getCardById(it.activeCardId) }
+            if (userCard != null && recipientPubKey.isNotBlank()) {
+                val decryptedPriv = try { keyStoreMaster.decryptLocalData(userCard.privateKeyEncrypted) } catch (e: Exception) { userCard.privateKeyEncrypted }
+                val keyPair = IdentityKeyPair(userCard.publicKey, decryptedPriv, "")
+                val payload = FortCryptoManager.encrypt(newText, recipientPubKey, keyPair)
+                remoteBackend.editMessageRemote(messageId, payload.ciphertextBase64, payload.ivBase64, payload.senderSignatureBase64, currentUserId)
+            }
+        }
         return Result.success(Unit)
     }
 
-    suspend fun deleteMessage(messageId: String): Result<Unit> {
+    suspend fun deleteMessage(messageId: String, currentUserId: String = ""): Result<Unit> {
+        val msg = database.chatMessageDao().getMessageById(messageId) ?: return Result.failure(IllegalArgumentException("Message not found."))
         database.chatMessageDao().markMessageDeleted(messageId)
+        if (msg.isMine && currentUserId.isNotBlank()) {
+            remoteBackend.deleteMessageRemote(messageId, currentUserId)
+        }
         return Result.success(Unit)
     }
 

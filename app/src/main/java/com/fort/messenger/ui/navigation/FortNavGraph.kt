@@ -30,6 +30,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.fort.messenger.ui.modals.ActiveCallTopBanner
 import com.fort.messenger.ui.modals.CallScreenModal
 import com.fort.messenger.ui.modals.ContactPassGeneratorSheet
 import com.fort.messenger.ui.modals.LocationShareBottomSheet
@@ -226,19 +227,28 @@ fun FortNavGraph(
     if (uiState.activeCallSession != null || uiState.incomingCallSession != null) {
         val session = uiState.activeCallSession ?: uiState.incomingCallSession!!
         val isIncoming = uiState.incomingCallSession != null && uiState.activeCallSession == null
-        CallScreenModal(
-            session = session,
-            isIncomingPrompt = isIncoming,
-            webrtcManager = viewModel.webrtcManager,
-            onAcceptCall = { viewModel.acceptIncomingCall() },
-            onDeclineCall = { viewModel.declineIncomingCall() },
-            onEndCall = { viewModel.endCall() },
-            onToggleMute = { viewModel.toggleMute() },
-            onToggleSpeaker = { viewModel.toggleSpeaker() },
-            onToggleVideo = { viewModel.toggleVideo() },
-            onSwitchCamera = { viewModel.switchCamera() },
-            onPermissionGranted = { viewModel.onCallPermissionsGranted() }
-        )
+        if (uiState.isCallMinimized && uiState.activeCallSession != null) {
+            ActiveCallTopBanner(
+                session = uiState.activeCallSession!!,
+                onExpandCall = { viewModel.expandCall() },
+                onEndCall = { viewModel.endCall() }
+            )
+        } else {
+            CallScreenModal(
+                session = session,
+                isIncomingPrompt = isIncoming,
+                webrtcManager = viewModel.webrtcManager,
+                onAcceptCall = { viewModel.acceptIncomingCall() },
+                onDeclineCall = { viewModel.declineIncomingCall() },
+                onEndCall = { viewModel.endCall() },
+                onToggleMute = { viewModel.toggleMute() },
+                onToggleSpeaker = { viewModel.toggleSpeaker() },
+                onToggleVideo = { viewModel.toggleVideo() },
+                onSwitchCamera = { viewModel.switchCamera() },
+                onPermissionGranted = { viewModel.onCallPermissionsGranted() },
+                onMinimizeCall = { viewModel.minimizeCall() }
+            )
+        }
     }
 
     if (uiState.isLocationShareModalOpen) {
