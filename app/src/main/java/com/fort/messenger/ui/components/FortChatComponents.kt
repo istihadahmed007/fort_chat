@@ -41,6 +41,11 @@ import com.fort.messenger.ui.theme.PrivateByDefaultTextDark
 import com.fort.messenger.ui.theme.PrivateByDefaultTextLight
 import com.fort.messenger.ui.theme.RoyalBluePrimary
 
+import com.fort.messenger.ui.theme.LocalIsDarkTheme
+
+@Composable
+fun isAppDarkTheme(): Boolean = LocalIsDarkTheme.current
+
 /**
  * Green "Private by default" chip matching Fort Chat reference design.
  */
@@ -48,7 +53,7 @@ import com.fort.messenger.ui.theme.RoyalBluePrimary
 fun PrivateByDefaultBadge(
     modifier: Modifier = Modifier
 ) {
-    val isDark = isSystemInDarkTheme()
+    val isDark = isAppDarkTheme()
     val bgColor = if (isDark) PrivateByDefaultBgDark else PrivateByDefaultBgLight
     val contentColor = if (isDark) PrivateByDefaultTextDark else PrivateByDefaultTextLight
 
@@ -77,35 +82,56 @@ fun PrivateByDefaultBadge(
 }
 
 /**
- * Fort Chat App Logo: Royal-blue rounded badge with chat bubble and shield.
+ * Ice-Blue Liquid-Glass Background Brush applied across Fort Chat screens.
+ */
+fun Modifier.iceBlueLiquidBackground(isDark: Boolean): Modifier = this.then(
+    Modifier.background(
+        Brush.verticalGradient(
+            colors = if (isDark) {
+                listOf(
+                    Color(0xFF0A0F1D),
+                    Color(0xFF0F172A),
+                    Color(0xFF0A0F1D)
+                )
+            } else {
+                listOf(
+                    Color(0xFFF0F7FF),
+                    Color(0xFFE8F1FC),
+                    Color(0xFFF8FAFD),
+                    Color(0xFFFFFFFF)
+                )
+            }
+        )
+    )
+)
+
+/**
+ * Fort Chat App Logo: Royal-blue shield badge with inner speech bubble matching mockup design.
  */
 @Composable
 fun FortChatLogoBadge(
     modifier: Modifier = Modifier,
     size: Dp = 38.dp
 ) {
-    val isDark = isSystemInDarkTheme()
-    val gradientBrush = Brush.verticalGradient(
-        colors = if (isDark) {
-            listOf(Color(0xFF3B82F6), Color(0xFF1D4ED8))
-        } else {
-            listOf(Color(0xFF2563EB), Color(0xFF1E40AF))
-        }
-    )
+    val isDark = isAppDarkTheme()
 
     Box(
         modifier = modifier
             .size(size)
-            .shadow(4.dp, RoundedCornerShape(11.dp), spotColor = Color(0x331E40AF))
-            .clip(RoundedCornerShape(11.dp))
-            .background(gradientBrush),
+            .shadow(4.dp, RoundedCornerShape(10.dp), spotColor = Color(0x331E40AF)),
         contentAlignment = Alignment.Center
     ) {
         Icon(
-            imageVector = Icons.Filled.ModeComment,
+            imageVector = Icons.Filled.Shield,
             contentDescription = "Fort Chat Logo",
+            tint = if (isDark) Color(0xFF3B82F6) else Color(0xFF2563EB),
+            modifier = Modifier.size(size)
+        )
+        Icon(
+            imageVector = Icons.Filled.ModeComment,
+            contentDescription = null,
             tint = Color.White,
-            modifier = Modifier.size(size * 0.58f)
+            modifier = Modifier.size(size * 0.52f)
         )
     }
 }
@@ -117,7 +143,7 @@ fun FortChatLogoBadge(
 fun FortChatEmptyHero(
     modifier: Modifier = Modifier
 ) {
-    val isDark = isSystemInDarkTheme()
+    val isDark = isAppDarkTheme()
     val ringOuter = if (isDark) Color(0xFF1E293B).copy(alpha = 0.4f) else Color(0xFFE2E8F0).copy(alpha = 0.5f)
     val ringMid = if (isDark) Color(0xFF1E3A5F).copy(alpha = 0.45f) else Color(0xFFDBEAFE).copy(alpha = 0.65f)
     val ringInner = if (isDark) Color(0xFF2563EB).copy(alpha = 0.25f) else Color(0xFFBFDBFE).copy(alpha = 0.55f)
@@ -213,7 +239,7 @@ fun FortChatEmptyHero(
 fun FortConnectionRequestHero(
     modifier: Modifier = Modifier
 ) {
-    val isDark = isSystemInDarkTheme()
+    val isDark = isAppDarkTheme()
     val ringOuter = if (isDark) Color(0xFF1E293B).copy(alpha = 0.4f) else Color(0xFFEFF6FF)
     val ringMid = if (isDark) Color(0xFF1E3A5F).copy(alpha = 0.5f) else Color(0xFFDBEAFE)
     val ringInner = if (isDark) Color(0xFF2563EB).copy(alpha = 0.25f) else Color(0xFFBFDBFE).copy(alpha = 0.65f)
@@ -278,7 +304,7 @@ fun FortPrivateConversationBanner(
     title: String = "Your conversation is private",
     description: String = "Messages are end-to-end encrypted and visible only to you and the other person."
 ) {
-    val isDark = isSystemInDarkTheme()
+    val isDark = isAppDarkTheme()
 
     Box(
         modifier = modifier

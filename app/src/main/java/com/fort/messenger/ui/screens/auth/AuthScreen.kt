@@ -7,6 +7,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
@@ -14,6 +15,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -23,6 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
+import com.fort.messenger.ui.components.iceBlueLiquidBackground
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -84,9 +87,13 @@ fun AuthScreen(
 
     val scrollState = rememberScrollState()
 
+    val isDark = com.fort.messenger.ui.components.isAppDarkTheme()
+
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        modifier = modifier.fillMaxSize()
+        containerColor = Color.Transparent,
+        modifier = modifier
+            .fillMaxSize()
+            .iceBlueLiquidBackground(isDark)
     ) { innerPadding ->
         Column(
             modifier = Modifier
@@ -485,9 +492,14 @@ fun AuthScreen(
                                     }
                                     val googleId = GoogleIdTokenCredential.createFrom(credential.data)
                                     viewModel.loginWithGoogle(googleId.idToken, googleId.displayName.orEmpty())
+                                } catch (error: GetCredentialCancellationException) {
+                                    // User explicitly dismissed Google picker; do not show error banner
+                                    android.util.Log.d("FortAuth", "User dismissed Google credential selector.")
                                 } catch (error: GetCredentialException) {
+                                    android.util.Log.e("FortAuth", "CredentialManager failed: ${error.type} - ${error.message}", error)
                                     viewModel.showAuthError(error.message ?: "Google sign-in was cancelled or unavailable.")
                                 } catch (error: Exception) {
+                                    android.util.Log.e("FortAuth", "Google sign-in failed", error)
                                     viewModel.showAuthError(error.message ?: "Google sign-in failed.")
                                 }
                             }

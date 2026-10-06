@@ -51,6 +51,8 @@ private val DarkColorScheme = darkColorScheme(
     onError = SurfaceWhite
 )
 
+val LocalIsDarkTheme = androidx.compose.runtime.staticCompositionLocalOf { false }
+
 @Composable
 fun FortTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
@@ -71,9 +73,11 @@ fun FortTheme(
         }
     }
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = FortTypography,
-        content = content
-    )
+    androidx.compose.runtime.CompositionLocalProvider(LocalIsDarkTheme provides darkTheme) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = FortTypography,
+            content = content
+        )
+    }
 }

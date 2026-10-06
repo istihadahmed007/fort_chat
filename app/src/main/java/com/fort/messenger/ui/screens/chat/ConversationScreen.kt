@@ -40,6 +40,7 @@ import com.fort.messenger.ui.components.FortPrivateConversationBanner
 import com.fort.messenger.ui.components.MoodRingBadge
 import com.fort.messenger.ui.components.PassCountdownChip
 import com.fort.messenger.ui.components.PrivateByDefaultBadge
+import com.fort.messenger.ui.components.iceBlueLiquidBackground
 import com.fort.messenger.ui.modals.PrivacyCheckDialog
 import com.fort.messenger.ui.modals.ShareCheckModal
 import com.fort.messenger.ui.theme.EmeraldVerified
@@ -59,7 +60,7 @@ fun ConversationScreen(
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val isDark = isSystemInDarkTheme()
+    val isDark = com.fort.messenger.ui.components.isAppDarkTheme()
     val isBangla = uiState.currentLanguage == AppLanguage.BANGLA
     val conversation = uiState.conversations.find { it.id == conversationId }
     var inputText by remember(conversationId) { mutableStateOf(viewModel.getDraft(conversationId)) }
@@ -566,8 +567,8 @@ fun ConversationScreen(
                 }
             }
         },
-        containerColor = MaterialTheme.colorScheme.background,
-        modifier = modifier
+        containerColor = Color.Transparent,
+        modifier = modifier.iceBlueLiquidBackground(isDark)
     ) { innerPadding ->
         Column(
             modifier = Modifier

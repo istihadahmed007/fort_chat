@@ -71,6 +71,7 @@ import com.fort.messenger.ui.components.PassCountdownChip
 import com.fort.messenger.ui.components.PrivateByDefaultBadge
 import com.fort.messenger.ui.components.QuietPresenceBanner
 import com.fort.messenger.ui.components.SovereignCard
+import com.fort.messenger.ui.components.iceBlueLiquidBackground
 import com.fort.messenger.ui.theme.EmeraldVerified
 import com.fort.messenger.ui.theme.RoseDestructive
 import com.fort.messenger.ui.theme.RoyalBluePrimary
@@ -85,7 +86,7 @@ fun ChatsHomeScreen(
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val isDark = isSystemInDarkTheme()
+    val isDark = com.fort.messenger.ui.components.isAppDarkTheme()
     val isBangla = uiState.currentLanguage == AppLanguage.BANGLA
     val activeCard = uiState.connectionCards.find { it.id == uiState.activeCardId }
 
@@ -198,8 +199,8 @@ fun ChatsHomeScreen(
                 }
             }
         },
-        containerColor = MaterialTheme.colorScheme.background,
-        modifier = modifier
+        containerColor = Color.Transparent,
+        modifier = modifier.iceBlueLiquidBackground(isDark)
     ) { innerPadding ->
         LazyColumn(
             modifier = Modifier

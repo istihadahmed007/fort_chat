@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.sp
 import com.fort.messenger.model.KnockFirstRequest
 import com.fort.messenger.ui.components.ConnectionCardBadge
 import com.fort.messenger.ui.components.FortConnectionRequestHero
+import com.fort.messenger.ui.components.iceBlueLiquidBackground
 import com.fort.messenger.ui.theme.RoseDestructive
 import com.fort.messenger.ui.theme.RoyalBluePrimary
 import com.fort.messenger.viewmodel.AppLanguage
@@ -66,7 +67,7 @@ fun KnockFirstRequestsScreen(
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val isDark = isSystemInDarkTheme()
+    val isDark = com.fort.messenger.ui.components.isAppDarkTheme()
     val isBangla = uiState.currentLanguage == AppLanguage.BANGLA
     val requests = uiState.inboundRequests
 
@@ -76,7 +77,7 @@ fun KnockFirstRequestsScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.background)
+                    .background(Color.Transparent)
                     .statusBarsPadding()
             ) {
                 Row(
@@ -109,8 +110,8 @@ fun KnockFirstRequestsScreen(
                 }
             }
         },
-        containerColor = MaterialTheme.colorScheme.background,
-        modifier = modifier
+        containerColor = Color.Transparent,
+        modifier = modifier.iceBlueLiquidBackground(isDark)
     ) { innerPadding ->
         if (requests.isEmpty()) {
             // Empty queue state
