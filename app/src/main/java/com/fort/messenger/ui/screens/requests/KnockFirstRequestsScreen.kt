@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Group
@@ -141,7 +142,7 @@ fun KnockFirstRequestsScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                imageVector = androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack,
+                                imageVector = androidx.compose.material.icons.Icons.Default.Close,
                                 contentDescription = if (isBangla) "বন্ধ করুন" else "Close",
                                 tint = if (isDark) Color(0xFF94A3B8) else Color(0xFF475569),
                                 modifier = Modifier.size(17.dp)
@@ -195,9 +196,9 @@ fun KnockFirstRequestsScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
-                    .padding(horizontal = 20.dp),
-                contentPadding = PaddingValues(top = 10.dp, bottom = 40.dp),
-                verticalArrangement = Arrangement.spacedBy(20.dp)
+                    .padding(horizontal = 18.dp),
+                contentPadding = PaddingValues(top = 2.dp, bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 itemsIndexed(requests, key = { _, req -> req.id }) { index, request ->
                     Column(
@@ -210,46 +211,20 @@ fun KnockFirstRequestsScreen(
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = if (isDark) com.fort.messenger.ui.theme.TextMutedDark else com.fort.messenger.ui.theme.ShowcaseMutedText,
-                                modifier = Modifier.padding(bottom = 6.dp)
+                                modifier = Modifier.padding(bottom = 4.dp)
                             )
                         }
 
                         // 3D Orbital Light Ring Hero matching Phone 2
                         com.fort.messenger.ui.components.FortKnockFirstOrbitalHero(
-                            modifier = Modifier.padding(vertical = 4.dp)
+                            modifier = Modifier.padding(top = 0.dp, bottom = 6.dp)
                         )
 
-                        // Title: "Knock First"
-                        Text(
-                            text = if (isBangla) "নক ফার্স্ট" else "Knock First",
-                            fontSize = 24.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isDark) com.fort.messenger.ui.theme.TextPrimaryDark else com.fort.messenger.ui.theme.ShowcaseNavyText,
-                            textAlign = TextAlign.Center
-                        )
-
-                        Spacer(modifier = Modifier.height(4.dp))
-
-                        // Subtitle: "Someone would like to start a conversation with you on Fort Chat."
-                        Text(
-                            text = if (isBangla)
-                                "কেউ আপনার সাথে ফোর্ট চ্যাটে কথোপকথন শুরু করতে চান।"
-                            else
-                                "Someone would like to start a conversation with you on Fort Chat.",
-                            fontSize = 13.5.sp,
-                            color = if (isDark) com.fort.messenger.ui.theme.TextMutedDark else com.fort.messenger.ui.theme.ShowcaseNavySubtext,
-                            textAlign = TextAlign.Center,
-                            lineHeight = 18.sp,
-                            modifier = Modifier.padding(horizontal = 16.dp)
-                        )
-
-                        Spacer(modifier = Modifier.height(18.dp))
-
-                        // Requester Profile Glass Card with 3 stacked pill actions
+                        // Requester Profile Glass Card with 3 stacked pill actions matching Phone 2
                         val displayName = request.senderName.ifBlank { "Maya Chen" }
-                        val handle = "@" + displayName.lowercase().replace(" ", "")
+                        val handle = "@" + displayName.lowercase().replace(" ", ".")
                         val excerpt = request.rawMessageExcerpt.ifBlank {
-                            "Hi! We met at the design summit. I'd love to stay in touch here."
+                            "Hi! We met at the design summit.\nI'd love to stay in touch here."
                         }
 
                         com.fort.messenger.ui.components.FortKnockFirstCard(

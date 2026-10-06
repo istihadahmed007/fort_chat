@@ -394,42 +394,7 @@ fun ConversationScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // Contact Pass Bounded Banner
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFFEFF6FF))
-                    .padding(horizontal = 14.dp, vertical = 8.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Outlined.Timer,
-                            contentDescription = null,
-                            tint = RoyalBluePrimary,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "${conversation.passType.label}: ${conversation.passTimeRemaining}",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = RoyalBluePrimary
-                        )
-                    }
 
-                    Text(
-                        text = "Sender-Authenticated E2EE",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF1E3A8A)
-                    )
-                }
-            }
 
             // Quick Support Response Banner if peer has active mood
             if (conversation.moodEmoji != null) {
@@ -989,16 +954,17 @@ fun ChatMessageBubble(
                     val isMineReacted = message.myReactions.contains(emoji)
                     Box(
                         modifier = Modifier
+                            .shadow(1.dp, RoundedCornerShape(12.dp), spotColor = Color(0x141E40AF))
                             .clip(RoundedCornerShape(12.dp))
-                            .background(if (isMineReacted) Color(0xFFDBEAFE) else Color(0xFFF1F5F9))
-                            .border(0.5.dp, if (isMineReacted) RoyalBluePrimary else Color(0xFFCBD5E1), RoundedCornerShape(12.dp))
+                            .background(if (isDark) Color(0xFF1E293B) else Color.White)
+                            .border(0.5.dp, if (isDark) Color(0xFF334155) else Color(0xFFE2E8F0), RoundedCornerShape(12.dp))
                             .clickable { onReactionClick(emoji) }
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                            .padding(horizontal = 7.dp, vertical = 2.5.dp)
                     ) {
                         Text(
-                            text = "$emoji $count",
-                            fontSize = 11.sp,
-                            fontWeight = if (isMineReacted) FontWeight.Bold else FontWeight.Normal
+                            text = if (count > 1) "$emoji $count" else emoji,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
                         )
                     }
                     Spacer(modifier = Modifier.width(4.dp))

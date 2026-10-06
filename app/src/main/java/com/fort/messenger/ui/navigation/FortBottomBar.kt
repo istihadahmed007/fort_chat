@@ -126,20 +126,6 @@ fun FortBottomBar(
                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                             color = contentColor
                         )
-
-                        // Active Indicator underline matching reference design
-                        if (isSelected) {
-                            Spacer(modifier = Modifier.height(3.dp))
-                            Box(
-                                modifier = Modifier
-                                    .width(20.dp)
-                                    .height(2.5.dp)
-                                    .clip(RoundedCornerShape(2.dp))
-                                    .background(RoyalBluePrimary)
-                            )
-                        } else {
-                            Spacer(modifier = Modifier.height(5.5.dp))
-                        }
                     }
                 }
             }

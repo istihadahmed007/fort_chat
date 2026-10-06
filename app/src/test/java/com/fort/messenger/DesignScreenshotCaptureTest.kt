@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.os.Looper
 import android.view.View
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.*
 import androidx.compose.ui.platform.ComposeView
 import androidx.test.core.app.ApplicationProvider
 import com.fort.messenger.data.local.FortDatabase
@@ -21,6 +22,7 @@ import com.fort.messenger.ui.screens.chats.ChatsHomeScreen
 import com.fort.messenger.ui.screens.requests.KnockFirstRequestsScreen
 import com.fort.messenger.ui.theme.FortTheme
 import com.fort.messenger.viewmodel.FortMainViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Before
@@ -35,7 +37,7 @@ import java.io.File
 import java.io.FileOutputStream
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], qualifiers = "w393dp-h852dp-xxhdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class DesignScreenshotCaptureTest {
 
@@ -71,8 +73,9 @@ class DesignScreenshotCaptureTest {
         activity.setContentView(composeView)
         Shadows.shadowOf(Looper.getMainLooper()).idle()
 
-        val width = 1080
-        val height = 2340
+        val dm = activity.resources.displayMetrics
+        val width = dm.widthPixels
+        val height = dm.heightPixels
         composeView.measure(
             View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY)
@@ -94,27 +97,55 @@ class DesignScreenshotCaptureTest {
 
     @Test
     fun testCaptureChatsScreenLightAndDark() = runBlocking {
-        // Register an authenticated user so ChatsHomeScreen displays the home UI
         repository.register("user@fort.chat", "Password123!", "Sovereign User").getOrThrow()
+        viewModel = FortMainViewModel(application, repository)
         Shadows.shadowOf(Looper.getMainLooper()).idle()
 
         captureView("screen1_chats_light.png") {
             FortTheme(darkTheme = false) {
-                ChatsHomeScreen(
-                    viewModel = viewModel,
-                    onNavigateToChat = {},
-                    onNavigateToYou = {}
-                )
+                androidx.compose.foundation.layout.Column(
+                    modifier = androidx.compose.ui.Modifier.fillMaxSize()
+                ) {
+                    com.fort.messenger.ui.components.FortDeviceStatusBar(isDark = false)
+                    androidx.compose.foundation.layout.Box(
+                        modifier = androidx.compose.ui.Modifier.weight(1f)
+                    ) {
+                        ChatsHomeScreen(
+                            viewModel = viewModel,
+                            onNavigateToChat = {},
+                            onNavigateToYou = {}
+                        )
+                    }
+                    com.fort.messenger.ui.navigation.FortBottomBar(
+                        currentDestination = com.fort.messenger.ui.navigation.FortDestination.CHATS,
+                        onNavigate = {}
+                    )
+                    com.fort.messenger.ui.components.FortHomeIndicator(isDark = false)
+                }
             }
         }
 
         captureView("screen1_chats_dark.png") {
             FortTheme(darkTheme = true) {
-                ChatsHomeScreen(
-                    viewModel = viewModel,
-                    onNavigateToChat = {},
-                    onNavigateToYou = {}
-                )
+                androidx.compose.foundation.layout.Column(
+                    modifier = androidx.compose.ui.Modifier.fillMaxSize()
+                ) {
+                    com.fort.messenger.ui.components.FortDeviceStatusBar(isDark = true)
+                    androidx.compose.foundation.layout.Box(
+                        modifier = androidx.compose.ui.Modifier.weight(1f)
+                    ) {
+                        ChatsHomeScreen(
+                            viewModel = viewModel,
+                            onNavigateToChat = {},
+                            onNavigateToYou = {}
+                        )
+                    }
+                    com.fort.messenger.ui.navigation.FortBottomBar(
+                        currentDestination = com.fort.messenger.ui.navigation.FortDestination.CHATS,
+                        onNavigate = {}
+                    )
+                    com.fort.messenger.ui.components.FortHomeIndicator(isDark = true)
+                }
             }
         }
     }
@@ -131,21 +162,37 @@ class DesignScreenshotCaptureTest {
             senderDisplayName = "Maya Chen",
             senderCardType = CardType.PERSONAL,
             source = "QR Code Scan",
-            rawMessage = "Hi! We met at the design summit. I'd love to stay in touch here.",
+            rawMessage = "Hi! We met at the design summit.\nI'd love to stay in touch here.",
             sandboxedLink = null,
             timestamp = "2h ago",
             status = "PENDING"
         )
         database.knockFirstDao().insertRequest(req)
-        repository.syncInboundKnockFirstRequests(user.userId)
+        viewModel = FortMainViewModel(application, repository)
         Shadows.shadowOf(Looper.getMainLooper()).idle()
+        var attempts = 0
+        while (viewModel.uiState.value.inboundRequests.isEmpty() && attempts < 30) {
+            delay(50)
+            Shadows.shadowOf(Looper.getMainLooper()).idle()
+            attempts++
+        }
 
         captureView("screen2_knock_first_light.png") {
             FortTheme(darkTheme = false) {
-                KnockFirstRequestsScreen(
-                    viewModel = viewModel,
-                    onNavigateBack = {}
-                )
+                androidx.compose.foundation.layout.Column(
+                    modifier = androidx.compose.ui.Modifier.fillMaxSize()
+                ) {
+                    com.fort.messenger.ui.components.FortDeviceStatusBar(isDark = false)
+                    androidx.compose.foundation.layout.Box(
+                        modifier = androidx.compose.ui.Modifier.weight(1f)
+                    ) {
+                        KnockFirstRequestsScreen(
+                            viewModel = viewModel,
+                            onNavigateBack = {}
+                        )
+                    }
+                    com.fort.messenger.ui.components.FortHomeIndicator(isDark = false)
+                }
             }
         }
     }
@@ -161,6 +208,15 @@ class DesignScreenshotCaptureTest {
 
         val convId = "conv_${peer.userId}"
 
+        fun timeAt(hour: Int, min: Int): Long {
+            val c = java.util.Calendar.getInstance()
+            c.set(java.util.Calendar.HOUR_OF_DAY, hour)
+            c.set(java.util.Calendar.MINUTE, min)
+            c.set(java.util.Calendar.SECOND, 0)
+            c.set(java.util.Calendar.MILLISECOND, 0)
+            return c.timeInMillis
+        }
+
         // Seed conversation messages matching Mobile Privacy Showcase Phone 3
         val m1 = com.fort.messenger.data.local.ChatMessageEntity(
             messageId = "msg_1",
@@ -171,7 +227,7 @@ class DesignScreenshotCaptureTest {
             iv = "mock_iv_1",
             ephemeralKey = "mock_key_1",
             decryptedTextCache = "Hey! Great to finally connect here. This app feels so calm.",
-            timestamp = 1700000001000L,
+            timestamp = timeAt(9, 17),
             deliveryStatus = "READ",
             isMine = false
         )
@@ -184,7 +240,7 @@ class DesignScreenshotCaptureTest {
             iv = "mock_iv_2",
             ephemeralKey = "mock_key_2",
             decryptedTextCache = "Agreed! Love the focus on privacy and real conversations.",
-            timestamp = 1700000002000L,
+            timestamp = timeAt(9, 19),
             deliveryStatus = "READ",
             isMine = true
         )
@@ -197,7 +253,7 @@ class DesignScreenshotCaptureTest {
             iv = "mock_iv_3",
             ephemeralKey = "mock_key_3",
             decryptedTextCache = "Same. Are you free to hop on a quick call later this week?",
-            timestamp = 1700000003000L,
+            timestamp = timeAt(9, 22),
             deliveryStatus = "READ",
             isMine = false
         )
@@ -210,7 +266,7 @@ class DesignScreenshotCaptureTest {
             iv = "mock_iv_4",
             ephemeralKey = "mock_key_4",
             decryptedTextCache = "Definitely! How about Thursday evening?",
-            timestamp = 1700000004000L,
+            timestamp = timeAt(9, 23),
             deliveryStatus = "READ",
             isMine = true
         )
@@ -223,7 +279,7 @@ class DesignScreenshotCaptureTest {
             iv = "mock_iv_5",
             ephemeralKey = "mock_key_5",
             decryptedTextCache = "Perfect. I'll send a time.",
-            timestamp = 1700000005000L,
+            timestamp = timeAt(9, 24),
             deliveryStatus = "READ",
             isMine = false,
             reactionsJson = "{\"👍\":[\"${user.userId}\"]}"
@@ -235,15 +291,32 @@ class DesignScreenshotCaptureTest {
         database.chatMessageDao().insertMessage(m4)
         database.chatMessageDao().insertMessage(m5)
 
+        viewModel = FortMainViewModel(application, repository)
         Shadows.shadowOf(Looper.getMainLooper()).idle()
+        var attempts = 0
+        while (viewModel.uiState.value.conversations.isEmpty() && attempts < 30) {
+            delay(50)
+            Shadows.shadowOf(Looper.getMainLooper()).idle()
+            attempts++
+        }
 
         captureView("screen3_conversation_light.png") {
             FortTheme(darkTheme = false) {
-                ConversationScreen(
-                    conversationId = convId,
-                    viewModel = viewModel,
-                    onNavigateBack = {}
-                )
+                androidx.compose.foundation.layout.Column(
+                    modifier = androidx.compose.ui.Modifier.fillMaxSize()
+                ) {
+                    com.fort.messenger.ui.components.FortDeviceStatusBar(isDark = false)
+                    androidx.compose.foundation.layout.Box(
+                        modifier = androidx.compose.ui.Modifier.weight(1f)
+                    ) {
+                        ConversationScreen(
+                            conversationId = convId,
+                            viewModel = viewModel,
+                            onNavigateBack = {}
+                        )
+                    }
+                    com.fort.messenger.ui.components.FortHomeIndicator(isDark = false)
+                }
             }
         }
     }
@@ -252,7 +325,17 @@ class DesignScreenshotCaptureTest {
     fun testCaptureAuthScreen() {
         captureView("screen4_auth_light.png") {
             FortTheme(darkTheme = false) {
-                AuthScreen(viewModel = viewModel)
+                androidx.compose.foundation.layout.Column(
+                    modifier = androidx.compose.ui.Modifier.fillMaxSize()
+                ) {
+                    com.fort.messenger.ui.components.FortDeviceStatusBar(isDark = false)
+                    androidx.compose.foundation.layout.Box(
+                        modifier = androidx.compose.ui.Modifier.weight(1f)
+                    ) {
+                        AuthScreen(viewModel = viewModel)
+                    }
+                    com.fort.messenger.ui.components.FortHomeIndicator(isDark = false)
+                }
             }
         }
     }
