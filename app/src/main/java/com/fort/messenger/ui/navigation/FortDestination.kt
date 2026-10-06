@@ -1,14 +1,14 @@
 package com.fort.messenger.ui.navigation
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.GroupWork
-import androidx.compose.material.icons.filled.Mail
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.ModeComment
-import androidx.compose.material.icons.filled.Shield
-import androidx.compose.material.icons.outlined.GroupWork
-import androidx.compose.material.icons.outlined.Mail
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.SentimentSatisfiedAlt
+import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.ModeComment
-import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.SentimentSatisfied
 import androidx.compose.ui.graphics.vector.ImageVector
 
 enum class FortDestination(
@@ -19,7 +19,7 @@ enum class FortDestination(
     val unselectedIcon: ImageVector
 ) {
     CHATS("chats", "Chats", "চ্যাট", Icons.Filled.ModeComment, Icons.Outlined.ModeComment),
-    CIRCLES("circles", "Circles", "সার্কেল", Icons.Filled.GroupWork, Icons.Outlined.GroupWork),
-    REQUESTS("requests", "Requests", "অনুরোধ", Icons.Filled.Mail, Icons.Outlined.Mail),
-    YOU("you", "You", "প্রোফাইল", Icons.Filled.Shield, Icons.Outlined.Shield)
+    CIRCLES("circles", "Circles", "সার্কেল", Icons.Filled.Groups, Icons.Outlined.Groups),
+    REQUESTS("requests", "Requests", "অনুরোধ", Icons.Filled.Notifications, Icons.Outlined.Notifications),
+    YOU("you", "You", "প্রোফাইল", Icons.Filled.SentimentSatisfiedAlt, Icons.Outlined.SentimentSatisfied)
 }

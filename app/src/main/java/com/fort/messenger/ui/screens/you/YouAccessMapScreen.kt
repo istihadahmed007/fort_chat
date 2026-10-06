@@ -72,6 +72,8 @@ import com.fort.messenger.ui.theme.EmeraldVerified
 import com.fort.messenger.ui.theme.IceBlueTint
 import com.fort.messenger.ui.theme.RoseDestructive
 import com.fort.messenger.ui.theme.RoyalBluePrimary
+import com.fort.messenger.ui.components.iceBlueLiquidBackground
+import com.fort.messenger.ui.components.isAppDarkTheme
 import com.fort.messenger.viewmodel.AppLanguage
 import com.fort.messenger.viewmodel.FortMainViewModel
 
@@ -81,6 +83,7 @@ fun YouAccessMapScreen(
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val isDark = isAppDarkTheme()
     val activeCard = uiState.connectionCards.find { it.id == uiState.activeCardId }
     val clipboard = LocalClipboardManager.current
     var showIdentityBackupDialog by remember { mutableStateOf(false) }
@@ -93,8 +96,8 @@ fun YouAccessMapScreen(
                 subtitle = "Sovereign Facets • Audit Log • Hardware Enclave"
             )
         },
-        containerColor = MaterialTheme.colorScheme.background,
-        modifier = modifier
+        containerColor = Color.Transparent,
+        modifier = modifier.iceBlueLiquidBackground(isDark)
     ) { innerPadding ->
         LazyColumn(
             modifier = Modifier

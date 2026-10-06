@@ -123,17 +123,17 @@ class DesignScreenshotCaptureTest {
     fun testCaptureKnockFirstRequestsScreen() = runBlocking {
         val user = repository.register("user@fort.chat", "Password123!", "Sovereign User").getOrThrow()
 
-        // Insert an inbound Knock First request matching mockup Screen 2
+        // Insert an inbound Knock First request matching Mobile Privacy Showcase Phone 2
         val req = KnockFirstRequestEntity(
             requestId = "req_101",
             recipientUserId = user.userId,
             senderUserId = "peer_202",
-            senderDisplayName = "Elena Rostova",
+            senderDisplayName = "Maya Chen",
             senderCardType = CardType.PERSONAL,
             source = "QR Code Scan",
-            rawMessage = "Someone you know wants to connect on Fort Chat.",
+            rawMessage = "Hi! We met at the design summit. I'd love to stay in touch here.",
             sandboxedLink = null,
-            timestamp = "Just now",
+            timestamp = "2h ago",
             status = "PENDING"
         )
         database.knockFirstDao().insertRequest(req)
@@ -153,13 +153,88 @@ class DesignScreenshotCaptureTest {
     @Test
     fun testCaptureConversationScreen() = runBlocking {
         val user = repository.register("user@fort.chat", "Password123!", "Sovereign User").getOrThrow()
-        val peer = repository.register("peer@fort.chat", "Password456!", "Elena Rostova").getOrThrow()
+        val peer = repository.register("peer@fort.chat", "Password456!", "Maya Chen").getOrThrow()
 
         // Establish connection pass
         val pass = repository.generatePass(peer.userId, CardType.PERSONAL, PassDurationType.SEVEN_DAYS).getOrThrow()
         repository.claimPass(pass.token, user.userId, "Sovereign User").getOrThrow()
 
         val convId = "conv_${peer.userId}"
+
+        // Seed conversation messages matching Mobile Privacy Showcase Phone 3
+        val m1 = com.fort.messenger.data.local.ChatMessageEntity(
+            messageId = "msg_1",
+            conversationId = convId,
+            senderUserId = peer.userId,
+            recipientUserId = user.userId,
+            ciphertext = "mock_cipher_1",
+            iv = "mock_iv_1",
+            ephemeralKey = "mock_key_1",
+            decryptedTextCache = "Hey! Great to finally connect here. This app feels so calm.",
+            timestamp = 1700000001000L,
+            deliveryStatus = "READ",
+            isMine = false
+        )
+        val m2 = com.fort.messenger.data.local.ChatMessageEntity(
+            messageId = "msg_2",
+            conversationId = convId,
+            senderUserId = user.userId,
+            recipientUserId = peer.userId,
+            ciphertext = "mock_cipher_2",
+            iv = "mock_iv_2",
+            ephemeralKey = "mock_key_2",
+            decryptedTextCache = "Agreed! Love the focus on privacy and real conversations.",
+            timestamp = 1700000002000L,
+            deliveryStatus = "READ",
+            isMine = true
+        )
+        val m3 = com.fort.messenger.data.local.ChatMessageEntity(
+            messageId = "msg_3",
+            conversationId = convId,
+            senderUserId = peer.userId,
+            recipientUserId = user.userId,
+            ciphertext = "mock_cipher_3",
+            iv = "mock_iv_3",
+            ephemeralKey = "mock_key_3",
+            decryptedTextCache = "Same. Are you free to hop on a quick call later this week?",
+            timestamp = 1700000003000L,
+            deliveryStatus = "READ",
+            isMine = false
+        )
+        val m4 = com.fort.messenger.data.local.ChatMessageEntity(
+            messageId = "msg_4",
+            conversationId = convId,
+            senderUserId = user.userId,
+            recipientUserId = peer.userId,
+            ciphertext = "mock_cipher_4",
+            iv = "mock_iv_4",
+            ephemeralKey = "mock_key_4",
+            decryptedTextCache = "Definitely! How about Thursday evening?",
+            timestamp = 1700000004000L,
+            deliveryStatus = "READ",
+            isMine = true
+        )
+        val m5 = com.fort.messenger.data.local.ChatMessageEntity(
+            messageId = "msg_5",
+            conversationId = convId,
+            senderUserId = peer.userId,
+            recipientUserId = user.userId,
+            ciphertext = "mock_cipher_5",
+            iv = "mock_iv_5",
+            ephemeralKey = "mock_key_5",
+            decryptedTextCache = "Perfect. I'll send a time.",
+            timestamp = 1700000005000L,
+            deliveryStatus = "READ",
+            isMine = false,
+            reactionsJson = "{\"👍\":[\"${user.userId}\"]}"
+        )
+
+        database.chatMessageDao().insertMessage(m1)
+        database.chatMessageDao().insertMessage(m2)
+        database.chatMessageDao().insertMessage(m3)
+        database.chatMessageDao().insertMessage(m4)
+        database.chatMessageDao().insertMessage(m5)
+
         Shadows.shadowOf(Looper.getMainLooper()).idle()
 
         captureView("screen3_conversation_light.png") {

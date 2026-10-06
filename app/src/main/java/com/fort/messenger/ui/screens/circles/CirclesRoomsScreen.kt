@@ -65,6 +65,9 @@ import com.fort.messenger.ui.theme.RoyalBluePrimary
 import com.fort.messenger.viewmodel.AppLanguage
 import com.fort.messenger.viewmodel.FortMainViewModel
 
+import com.fort.messenger.ui.components.iceBlueLiquidBackground
+import com.fort.messenger.ui.components.isAppDarkTheme
+
 enum class CircleScreenTab(val labelEn: String, val labelBn: String) {
     SHARING_CIRCLES("Sharing Circles", "শেয়ারিং সার্কেল"),
     PRIVATE_ROOMS("Private Rooms", "প্রাইভেট রুম")
@@ -76,6 +79,7 @@ fun CirclesRoomsScreen(
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val isDark = isAppDarkTheme()
     var selectedTab by remember { mutableStateOf(CircleScreenTab.SHARING_CIRCLES) }
 
     Scaffold(
@@ -85,8 +89,8 @@ fun CirclesRoomsScreen(
                 subtitle = "Cryptographic Visibility Groups & Bounded Spaces"
             )
         },
-        containerColor = MaterialTheme.colorScheme.background,
-        modifier = modifier
+        containerColor = Color.Transparent,
+        modifier = modifier.iceBlueLiquidBackground(isDark)
     ) { innerPadding ->
         Column(
             modifier = Modifier

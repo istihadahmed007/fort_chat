@@ -44,17 +44,17 @@ fun FortBottomBar(
     language: AppLanguage = AppLanguage.ENGLISH,
     modifier: Modifier = Modifier
 ) {
-    val isDark = isSystemInDarkTheme()
-    val barBg = if (isDark) Color(0xEB0D1527) else Color(0xF7FFFFFF)
+    val isDark = com.fort.messenger.ui.components.isAppDarkTheme()
+    val barBg = if (isDark) Color(0xF00D1527) else Color(0xF5FFFFFF)
     val barBorder = if (isDark) Color(0xFF1E2B47) else Color(0xFFE2E8F0)
 
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .shadow(elevation = 6.dp, spotColor = Color(0x1A1E40AF))
+            .shadow(elevation = 8.dp, spotColor = Color(0x1A1E40AF))
             .background(barBg)
             .border(
-                width = 0.5.dp,
+                width = 0.6.dp,
                 color = barBorder
             )
             .navigationBarsPadding()

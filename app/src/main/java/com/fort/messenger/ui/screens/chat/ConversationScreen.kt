@@ -104,147 +104,77 @@ fun ConversationScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface)
+                    .background(
+                        if (isDark) Color(0xEB0D1527)
+                        else Color.White.copy(alpha = 0.85f)
+                    )
                     .border(
                         0.5.dp,
                         if (isDark) Color(0xFF1E2B47) else Color(0xFFE2E8F0)
                     )
                     .statusBarsPadding()
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(64.dp)
-                        .padding(horizontal = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                var showOverflowMenu by remember { mutableStateOf(false) }
+
+                com.fort.messenger.ui.components.FortConversationTopBar(
+                    participantName = conversation.participantName,
+                    avatarEmoji = conversation.avatarEmoji,
+                    onBack = onNavigateBack,
+                    onVideoCall = {
+                        val peerUserId = conversationId.removePrefix("conv_")
+                        viewModel.startCall(peerUserId, conversation.participantName, CallType.VIDEO)
+                    },
+                    onAudioCall = {
+                        val peerUserId = conversationId.removePrefix("conv_")
+                        viewModel.startCall(peerUserId, conversation.participantName, CallType.AUDIO)
+                    },
+                    onOverflow = { showOverflowMenu = true }
+                )
+
+                DropdownMenu(
+                    expanded = showOverflowMenu,
+                    onDismissRequest = { showOverflowMenu = false }
                 ) {
-                    IconButton(
-                        onClick = onNavigateBack,
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = if (isBangla) "ফিরে যান" else "Back",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-
-                    // Avatar / Fort Logo Badge matching reference
-                    Box(modifier = Modifier.size(42.dp)) {
-                        Box(
-                            modifier = Modifier
-                                .size(38.dp)
-                                .clip(CircleShape)
-                                .background(if (isDark) Color(0xFF1E2B47) else Color(0xFFEFF6FF)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(text = conversation.avatarEmoji, fontSize = 20.sp)
-                        }
-                        if (conversation.moodEmoji != null) {
-                            MoodRingBadge(
-                                moodEmoji = conversation.moodEmoji,
-                                modifier = Modifier.align(Alignment.BottomEnd)
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.width(10.dp))
-
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = if (conversation.isRoom) conversation.participantName else (if (isBangla) "গোপন চ্যাট" else "Private chat"),
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            if (conversation.isRoom) {
-                                Spacer(modifier = Modifier.width(6.dp))
-                                ConnectionCardBadge(cardType = conversation.cardType)
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(2.dp))
-                        PrivateByDefaultBadge()
-                    }
-
-                    // Audio & Video Call Actions - Limited strictly to accepted contacts
-                    if (!conversation.isRoom) {
-                        Box {
-                            IconButton(
-                                onClick = { showCallMenu = true },
-                                modifier = Modifier.size(48.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .clip(CircleShape)
-                                        .background(if (isDark) Color(0xFF1E2B47) else Color(0xFFEFF6FF)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.Call,
-                                        contentDescription = if (isBangla) "কল করুন" else "Call Contact",
-                                        tint = RoyalBluePrimary,
-                                        modifier = Modifier.size(19.dp)
-                                    )
-                                }
-                            }
-
-                            DropdownMenu(
-                                expanded = showCallMenu,
-                                onDismissRequest = { showCallMenu = false }
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text(if (isBangla) "অডিও কল" else "Audio Call") },
-                                    leadingIcon = { Icon(Icons.Outlined.Call, contentDescription = null, tint = RoyalBluePrimary) },
-                                    onClick = {
-                                        showCallMenu = false
-                                        val peerUserId = conversationId.removePrefix("conv_")
-                                        viewModel.startCall(peerUserId, conversation.participantName, CallType.AUDIO)
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(if (isBangla) "ভিডিও কল" else "Video Call") },
-                                    leadingIcon = { Icon(Icons.Outlined.Videocam, contentDescription = null, tint = RoyalBluePrimary) },
-                                    onClick = {
-                                        showCallMenu = false
-                                        val peerUserId = conversationId.removePrefix("conv_")
-                                        viewModel.startCall(peerUserId, conversation.participantName, CallType.VIDEO)
-                                    }
-                                )
-                            }
-                        }
-                    }
-
-                    // In-chat Search Toggle Button
-                    IconButton(
+                    DropdownMenuItem(
+                        text = { Text(if (isBangla) "বার্তা অনুসন্ধান" else "Search Messages") },
+                        leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = RoyalBluePrimary) },
                         onClick = {
+                            showOverflowMenu = false
                             isSearchActive = !isSearchActive
                             if (!isSearchActive) searchQuery = ""
-                        },
-                        modifier = Modifier.size(40.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Search,
-                            contentDescription = if (isBangla) "বার্তা অনুসন্ধান" else "Search Messages",
-                            tint = if (isSearchActive) RoyalBluePrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(if (isBangla) "গোপনীয়তা চেক" else "Privacy Check") },
+                        leadingIcon = { Icon(Icons.Outlined.Shield, contentDescription = null, tint = RoyalBluePrimary) },
+                        onClick = {
+                            showOverflowMenu = false
+                            viewModel.openPrivacyCheck()
+                        }
+                    )
+                }
 
-                    // Privacy Check Button
-                    IconButton(
-                        onClick = { viewModel.openPrivacyCheck() },
-                        modifier = Modifier.size(40.dp)
+                // In-Conversation Search Bar
+                AnimatedVisibility(visible = isSearchActive) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Shield,
-                            contentDescription = if (isBangla) "গোপনীয়তা চেক" else "Privacy Check",
-                            tint = RoyalBluePrimary,
-                            modifier = Modifier.size(20.dp)
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("Search encrypted messages...", fontSize = 12.sp) },
+                            singleLine = true,
+                            trailingIcon = {
+                                if (searchQuery.isNotEmpty()) {
+                                    IconButton(onClick = { searchQuery = "" }) {
+                                        Icon(Icons.Default.Close, contentDescription = "Clear", modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp)
                         )
                     }
                 }
@@ -398,173 +328,62 @@ fun ConversationScreen(
                     }
                 }
 
-                // Message Input Row matching Screen 3 (Pill Bar)
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                // Attachment menu
+                DropdownMenu(
+                    expanded = showAttachmentMenu,
+                    onDismissRequest = { showAttachmentMenu = false }
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp)
-                            .shadow(elevation = 2.dp, shape = RoundedCornerShape(26.dp), spotColor = Color(0x141E40AF))
-                            .clip(RoundedCornerShape(26.dp))
-                            .background(if (isDark) Color(0xFF131D31) else Color.White)
-                            .border(
-                                0.5.dp,
-                                if (isDark) Color(0xFF1E3A5F) else Color(0xFFDBEAFE),
-                                RoundedCornerShape(26.dp)
-                            )
-                            .padding(horizontal = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // (+) Attachment button (>=48dp touch target)
-                        Box {
-                            IconButton(
-                                onClick = { showAttachmentMenu = true },
-                                modifier = Modifier.size(46.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(32.dp)
-                                        .clip(CircleShape)
-                                        .background(if (isDark) Color(0xFF1E293B) else Color(0xFFF1F5F9)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Add,
-                                        contentDescription = if (isBangla) "মিডিয়া বা ফাইল যুক্ত করুন" else "Attach Media or File",
-                                        tint = if (isDark) Color(0xFF94A3B8) else Color(0xFF475569),
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                            }
-
-                            DropdownMenu(
-                                expanded = showAttachmentMenu,
-                                onDismissRequest = { showAttachmentMenu = false }
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text(if (isBangla) "ক্যামেরা ছবি (EXIF স্ক্রাবড)" else "Sanitized Camera Photo (EXIF Scrubbed)") },
-                                    leadingIcon = { Icon(Icons.Outlined.PhotoCamera, contentDescription = null, tint = RoyalBluePrimary) },
-                                    onClick = {
-                                        showAttachmentMenu = false
-                                        viewModel.openShareCheck()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(if (isBangla) "ব্যক্তিগত অবস্থান শেয়ার (পিন / লাইভ)" else "Share Private Location (Pin / Live)") },
-                                    leadingIcon = { Icon(Icons.Outlined.LocationOn, contentDescription = null, tint = RoyalBluePrimary) },
-                                    onClick = {
-                                        showAttachmentMenu = false
-                                        viewModel.openLocationShareModal()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(if (isBangla) "ফাইল / ডকুমেন্ট পাঠান" else "Send File / Document") },
-                                    leadingIcon = { Icon(Icons.Outlined.Description, contentDescription = null, tint = RoyalBluePrimary) },
-                                    onClick = {
-                                        showAttachmentMenu = false
-                                        viewModel.sendMessage(
-                                            text = "📄 sovereign_enclave_manifest.pdf",
-                                            attachmentUri = "content://fort/manifest.pdf",
-                                            attachmentType = "FILE",
-                                            attachmentName = "sovereign_enclave_manifest.pdf",
-                                            attachmentSize = 48200L
-                                        )
-                                    }
-                                )
-                            }
+                    DropdownMenuItem(
+                        text = { Text(if (isBangla) "ক্যামেরা ছবি (EXIF স্ক্রাবড)" else "Sanitized Camera Photo (EXIF Scrubbed)") },
+                        leadingIcon = { Icon(Icons.Outlined.PhotoCamera, contentDescription = null, tint = RoyalBluePrimary) },
+                        onClick = {
+                            showAttachmentMenu = false
+                            viewModel.openShareCheck()
                         }
-
-                        // Message Text Field
-                        BasicTextField(
-                            value = inputText,
-                            onValueChange = {
-                                inputText = it
-                                viewModel.setDraft(conversationId, it)
-                                viewModel.onUserTyping(conversationId, it.isNotBlank())
-                            },
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(horizontal = 8.dp),
-                            textStyle = TextStyle(
-                                fontSize = 14.sp,
-                                color = MaterialTheme.colorScheme.onSurface
-                            ),
-                            singleLine = false,
-                            maxLines = 4,
-                            cursorBrush = SolidColor(RoyalBluePrimary),
-                            decorationBox = { innerTextField ->
-                                if (inputText.isEmpty()) {
-                                    Text(
-                                        text = if (isBangla) "বার্তা লিখুন..." else "Message...",
-                                        fontSize = 14.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                innerTextField()
-                            }
-                        )
-
-                        // Smiley Emoji Button (>=48dp touch target)
-                        IconButton(
-                            onClick = { showEmojiPicker = !showEmojiPicker },
-                            modifier = Modifier.size(46.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.SentimentSatisfied,
-                                contentDescription = if (isBangla) "ইমোজি" else "Emoji",
-                                tint = if (showEmojiPicker) RoyalBluePrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(20.dp)
+                    )
+                    DropdownMenuItem(
+                        text = { Text(if (isBangla) "ব্যক্তিগত অবস্থান শেয়ার (পিন / লাইভ)" else "Share Private Location (Pin / Live)") },
+                        leadingIcon = { Icon(Icons.Outlined.LocationOn, contentDescription = null, tint = RoyalBluePrimary) },
+                        onClick = {
+                            showAttachmentMenu = false
+                            viewModel.openLocationShareModal()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(if (isBangla) "ফাইল / ডকুমেন্ট পাঠান" else "Send File / Document") },
+                        leadingIcon = { Icon(Icons.Outlined.Description, contentDescription = null, tint = RoyalBluePrimary) },
+                        onClick = {
+                            showAttachmentMenu = false
+                            viewModel.sendMessage(
+                                text = "📄 sovereign_enclave_manifest.pdf",
+                                attachmentUri = "content://fort/manifest.pdf",
+                                attachmentType = "FILE",
+                                attachmentName = "sovereign_enclave_manifest.pdf",
+                                attachmentSize = 48200L
                             )
                         }
-
-                        // Mic / Send Button (>=48dp touch target)
-                        if (inputText.isNotBlank()) {
-                            IconButton(
-                                onClick = {
-                                    val textToSend = inputText
-                                    inputText = ""
-                                    viewModel.setDraft(conversationId, "")
-                                    viewModel.onUserTyping(conversationId, false)
-                                    viewModel.sendMessage(textToSend)
-                                },
-                                modifier = Modifier.size(46.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(34.dp)
-                                        .clip(CircleShape)
-                                        .background(RoyalBluePrimary),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Filled.Send,
-                                        contentDescription = if (isBangla) "পাঠান" else "Send",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            }
-                        } else {
-                            IconButton(
-                                onClick = {
-                                    viewModel.sendMessage("🎙️ [Voice note: 0:04]")
-                                },
-                                modifier = Modifier.size(46.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Mic,
-                                    contentDescription = if (isBangla) "ভয়েস রেকর্ড" else "Voice Note",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                    }
+                    )
                 }
+
+                // Floating Pill Composer matching Phone 3
+                com.fort.messenger.ui.components.FortConversationPillComposer(
+                    text = inputText,
+                    onTextChanged = {
+                        inputText = it
+                        viewModel.setDraft(conversationId, it)
+                        viewModel.onUserTyping(conversationId, it.isNotBlank())
+                    },
+                    onSend = {
+                        val textToSend = inputText
+                        inputText = ""
+                        viewModel.setDraft(conversationId, "")
+                        viewModel.onUserTyping(conversationId, false)
+                        viewModel.sendMessage(textToSend)
+                    },
+                    onAttach = { showAttachmentMenu = true },
+                    onEmojiToggle = { showEmojiPicker = !showEmojiPicker },
+                    onMic = { viewModel.sendMessage("🎙️ [Voice note: 0:04]") }
+                )
             }
         },
         containerColor = Color.Transparent,
@@ -687,15 +506,33 @@ fun ConversationScreen(
                 contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Central Privacy Shield Banner matching reference Screen 3
+                // Floating E2EE pill badge matching Phone 3
                 item {
-                    FortPrivateConversationBanner(
-                        title = if (isBangla) "আপনার কথোপকথনটি গোপনীয়" else "Your conversation is private",
-                        description = if (isBangla)
-                            "বার্তাগুলো এন্ড-টু-এন্ড এনক্রিপ্টেড এবং কেবল আপনি ও অপর ব্যক্তির কাছে দৃশ্যমান।"
-                        else
-                            "Messages are end-to-end encrypted and visible only to you and the other person."
-                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        com.fort.messenger.ui.components.FortEncryptedPillBadge()
+                    }
+                }
+
+                // Centered "Today" date indicator
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (isBangla) "আজ" else "Today",
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = if (isDark) com.fort.messenger.ui.theme.TextMutedDark else com.fort.messenger.ui.theme.ShowcaseMutedText
+                        )
+                    }
                 }
 
                 items(displayMessages, key = { it.id }) { message ->
@@ -872,9 +709,27 @@ fun ChatMessageBubble(
 ) {
     val isMine = message.isMine
     val context = LocalContext.current
-    val bubbleColor = if (isMine) RoyalBluePrimary else MaterialTheme.colorScheme.surface
-    val textColor = if (isMine) Color.White else MaterialTheme.colorScheme.onSurface
-    val timeColor = if (isMine) Color(0xFFDBEAFE) else MaterialTheme.colorScheme.onSurfaceVariant
+    val isDark = com.fort.messenger.ui.components.isAppDarkTheme()
+    val bubbleColor = if (isMine) {
+        if (isDark) com.fort.messenger.ui.theme.SkyBlueBubbleDark else com.fort.messenger.ui.theme.SkyBlueBubbleLight
+    } else {
+        if (isDark) Color(0xFF1E293B) else Color.White.copy(alpha = 0.92f)
+    }
+    val bubbleBorder = if (isMine) {
+        if (isDark) Color(0xFF2563EB).copy(alpha = 0.4f) else Color(0xFF93C5FD).copy(alpha = 0.6f)
+    } else {
+        if (isDark) Color(0xFF334155) else Color(0xFFE2E8F0)
+    }
+    val textColor = if (isMine) {
+        if (isDark) com.fort.messenger.ui.theme.TextPrimaryDark else com.fort.messenger.ui.theme.ShowcaseNavyText
+    } else {
+        if (isDark) com.fort.messenger.ui.theme.TextPrimaryDark else com.fort.messenger.ui.theme.ShowcaseNavyText
+    }
+    val timeColor = if (isMine) {
+        if (isDark) Color(0xFF94A3B8) else Color(0xFF475569)
+    } else {
+        if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
+    }
     val alignment = if (isMine) Alignment.End else Alignment.Start
 
     Column(
@@ -883,19 +738,34 @@ fun ChatMessageBubble(
     ) {
         Box(
             modifier = Modifier
+                .shadow(
+                    elevation = 1.5.dp,
+                    shape = RoundedCornerShape(
+                        topStart = 18.dp,
+                        topEnd = 18.dp,
+                        bottomStart = if (isMine) 18.dp else 4.dp,
+                        bottomEnd = if (isMine) 4.dp else 18.dp
+                    ),
+                    spotColor = Color(0x141E40AF)
+                )
                 .clip(
                     RoundedCornerShape(
-                        topStart = 16.dp,
-                        topEnd = 16.dp,
-                        bottomStart = if (isMine) 16.dp else 4.dp,
-                        bottomEnd = if (isMine) 4.dp else 16.dp
+                        topStart = 18.dp,
+                        topEnd = 18.dp,
+                        bottomStart = if (isMine) 18.dp else 4.dp,
+                        bottomEnd = if (isMine) 4.dp else 18.dp
                     )
                 )
                 .background(bubbleColor)
                 .border(
-                    width = if (isMine) 0.dp else 0.5.dp,
-                    color = MaterialTheme.colorScheme.outline,
-                    shape = RoundedCornerShape(16.dp)
+                    width = 0.8.dp,
+                    color = bubbleBorder,
+                    shape = RoundedCornerShape(
+                        topStart = 18.dp,
+                        topEnd = 18.dp,
+                        bottomStart = if (isMine) 18.dp else 4.dp,
+                        bottomEnd = if (isMine) 4.dp else 18.dp
+                    )
                 )
                 .clickable { onMessageClick() }
                 .padding(horizontal = 14.dp, vertical = 10.dp)
@@ -1093,8 +963,8 @@ fun ChatMessageBubble(
                             "READ" -> Icon(
                                 imageVector = Icons.Outlined.DoneAll,
                                 contentDescription = "Read",
-                                tint = EmeraldVerified,
-                                modifier = Modifier.size(12.dp)
+                                tint = if (isDark) Color(0xFF60A5FA) else Color(0xFF2563EB),
+                                modifier = Modifier.size(13.dp)
                             )
                             else -> Icon(
                                 imageVector = Icons.Outlined.ErrorOutline,

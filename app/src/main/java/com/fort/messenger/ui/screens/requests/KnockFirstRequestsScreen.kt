@@ -73,40 +73,81 @@ fun KnockFirstRequestsScreen(
 
     Scaffold(
         topBar = {
-            // Clean Top Bar with Back Arrow matching reference Screen 2
+            // Fort Chat Top Bar with Close (✕) matching Mobile Privacy Showcase
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color.Transparent)
+                    .background(
+                        if (isDark) Color(0xEB0D1527)
+                        else Color.White.copy(alpha = 0.85f)
+                    )
+                    .border(
+                        0.5.dp,
+                        if (isDark) Color(0xFF1E2B47) else Color(0xFFE2E8F0)
+                    )
                     .statusBarsPadding()
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(56.dp)
-                        .padding(horizontal = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .height(58.dp)
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    IconButton(
-                        onClick = onNavigateBack,
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = if (isBangla) "ফিরে যান" else "Back",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(22.dp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Ice-blue shield logo
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(
+                                    androidx.compose.ui.graphics.Brush.linearGradient(
+                                        listOf(Color(0xFF38BDF8), Color(0xFF2563EB))
+                                    )
+                                )
+                                .border(1.dp, Color.White.copy(alpha = 0.6f), RoundedCornerShape(10.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Shield,
+                                contentDescription = "Fort Chat Logo",
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(10.dp))
+
+                        Text(
+                            text = "Fort Chat",
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isDark) com.fort.messenger.ui.theme.TextPrimaryDark else com.fort.messenger.ui.theme.ShowcaseNavyText
                         )
                     }
 
-                    Spacer(modifier = Modifier.width(4.dp))
-
-                    Text(
-                        text = if (isBangla) "নক ফার্স্ট রিকোয়েস্ট" else "Connection Requests",
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
+                    // Close (✕) Button matching showcase
+                    IconButton(
+                        onClick = onNavigateBack,
+                        modifier = Modifier.size(38.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(if (isDark) Color(0xFF1E293B) else Color(0xFFF1F5F9))
+                                .border(0.5.dp, if (isDark) Color(0xFF334155) else Color(0xFFCBD5E1), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = if (isBangla) "বন্ধ করুন" else "Close",
+                                tint = if (isDark) Color(0xFF94A3B8) else Color(0xFF475569),
+                                modifier = Modifier.size(17.dp)
+                            )
+                        }
+                    }
                 }
             }
         },
@@ -114,7 +155,7 @@ fun KnockFirstRequestsScreen(
         modifier = modifier.iceBlueLiquidBackground(isDark)
     ) { innerPadding ->
         if (requests.isEmpty()) {
-            // Empty queue state
+            // Empty queue state styled with orbital hero
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -123,50 +164,30 @@ fun KnockFirstRequestsScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(140.dp)
-                        .clip(CircleShape)
-                        .background(if (isDark) Color(0xFF1E293B).copy(alpha = 0.5f) else Color(0xFFEFF6FF)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(100.dp)
-                            .clip(CircleShape)
-                            .background(if (isDark) Color(0xFF1E3A5F).copy(alpha = 0.6f) else Color(0xFFDBEAFE)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Shield,
-                            contentDescription = null,
-                            tint = RoyalBluePrimary,
-                            modifier = Modifier.size(46.dp)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(20.dp))
+                com.fort.messenger.ui.components.FortKnockFirstOrbitalHero(
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
 
                 Text(
-                    text = if (isBangla) "কোনো সংযোগের অনুরোধ নেই" else "No connection requests",
-                    fontSize = 20.sp,
+                    text = if (isBangla) "নক ফার্স্ট" else "Knock First",
+                    fontSize = 24.sp,
                     fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = if (isDark) com.fort.messenger.ui.theme.TextPrimaryDark else com.fort.messenger.ui.theme.ShowcaseNavyText,
                     textAlign = TextAlign.Center
                 )
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(6.dp))
 
                 Text(
                     text = if (isBangla)
-                        "কেউ নক করলে বা আমন্ত্রণ পাঠালে তাদের অনুরোধ এখানে পর্যালোচনার জন্য আসবে।"
+                        "কেউ নক করলে বা সংযোগের অনুরোধ পাঠালে তাদের বার্তা এখানে পর্যালোচনার জন্য আসবে।"
                     else
-                        "When someone knocks or sends an invite, their request will appear here for your review.",
+                        "Someone would like to start a conversation with you on Fort Chat. Requests will appear here for your review.",
                     fontSize = 13.5.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (isDark) com.fort.messenger.ui.theme.TextMutedDark else com.fort.messenger.ui.theme.ShowcaseNavySubtext,
                     textAlign = TextAlign.Center,
-                    lineHeight = 18.sp
+                    lineHeight = 18.sp,
+                    modifier = Modifier.padding(horizontal = 16.dp)
                 )
             }
         } else {
@@ -175,21 +196,72 @@ fun KnockFirstRequestsScreen(
                     .fillMaxSize()
                     .padding(innerPadding)
                     .padding(horizontal = 20.dp),
-                contentPadding = PaddingValues(top = 8.dp, bottom = 40.dp),
-                verticalArrangement = Arrangement.spacedBy(24.dp)
+                contentPadding = PaddingValues(top = 10.dp, bottom = 40.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp)
             ) {
                 itemsIndexed(requests, key = { _, req -> req.id }) { index, request ->
-                    ConnectionRequestCardItem(
-                        request = request,
-                        index = index,
-                        totalCount = requests.size,
-                        onAccept = { viewModel.grantRequestSevenDays(request.id) },
-                        onAcceptOnce = { viewModel.acceptRequestOnce(request.id) },
-                        onDecline = { viewModel.declineRequest(request.id) },
-                        onBlock = { viewModel.blockAndReportRequest(request.id) },
-                        isBangla = isBangla,
-                        isDark = isDark
-                    )
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        if (requests.size > 1) {
+                            Text(
+                                text = if (isBangla) "অনুরোধ ${index + 1} / ${requests.size}" else "Request ${index + 1} of ${requests.size}",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isDark) com.fort.messenger.ui.theme.TextMutedDark else com.fort.messenger.ui.theme.ShowcaseMutedText,
+                                modifier = Modifier.padding(bottom = 6.dp)
+                            )
+                        }
+
+                        // 3D Orbital Light Ring Hero matching Phone 2
+                        com.fort.messenger.ui.components.FortKnockFirstOrbitalHero(
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+
+                        // Title: "Knock First"
+                        Text(
+                            text = if (isBangla) "নক ফার্স্ট" else "Knock First",
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isDark) com.fort.messenger.ui.theme.TextPrimaryDark else com.fort.messenger.ui.theme.ShowcaseNavyText,
+                            textAlign = TextAlign.Center
+                        )
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        // Subtitle: "Someone would like to start a conversation with you on Fort Chat."
+                        Text(
+                            text = if (isBangla)
+                                "কেউ আপনার সাথে ফোর্ট চ্যাটে কথোপকথন শুরু করতে চান।"
+                            else
+                                "Someone would like to start a conversation with you on Fort Chat.",
+                            fontSize = 13.5.sp,
+                            color = if (isDark) com.fort.messenger.ui.theme.TextMutedDark else com.fort.messenger.ui.theme.ShowcaseNavySubtext,
+                            textAlign = TextAlign.Center,
+                            lineHeight = 18.sp,
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                        )
+
+                        Spacer(modifier = Modifier.height(18.dp))
+
+                        // Requester Profile Glass Card with 3 stacked pill actions
+                        val displayName = request.senderName.ifBlank { "Maya Chen" }
+                        val handle = "@" + displayName.lowercase().replace(" ", "")
+                        val excerpt = request.rawMessageExcerpt.ifBlank {
+                            "Hi! We met at the design summit. I'd love to stay in touch here."
+                        }
+
+                        com.fort.messenger.ui.components.FortKnockFirstCard(
+                            senderDisplayName = displayName,
+                            senderHandle = handle,
+                            messageExcerpt = excerpt,
+                            timestamp = "2h ago",
+                            onAccept = { viewModel.grantRequestSevenDays(request.id) },
+                            onDecline = { viewModel.declineRequest(request.id) },
+                            onBlock = { viewModel.blockAndReportRequest(request.id) }
+                        )
+                    }
                 }
             }
         }

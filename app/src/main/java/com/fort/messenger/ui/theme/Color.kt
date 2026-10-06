@@ -57,3 +57,32 @@ val PrivateByDefaultTextLight = Color(0xFF137333)
 val PrivateByDefaultBgDark = Color(0xFF0F3822)
 val PrivateByDefaultTextDark = Color(0xFF81C995)
 
+// Showcase Reference Tokens (Mobile Privacy Showcase)
+val ShowcaseBgLight = Color(0xFFEDF4FC)
+val ShowcaseNavyText = Color(0xFF0F172A)
+val ShowcaseNavySubtext = Color(0xFF475569)
+val ShowcaseMutedText = Color(0xFF64748B)
+
+val QuietPresencePillBgLight = Color(0xFFE0F2FE)
+val QuietPresencePillBgDark = Color(0xFF132A44)
+val QuietPresencePillBorderLight = Color(0xFFBAE6FD)
+val QuietPresencePillBorderDark = Color(0xFF1E3A5F)
+val QuietPresenceText = Color(0xFF0369A1)
+val QuietPresenceTextDark = Color(0xFF7DD3FC)
+
+val SkyBlueBubbleLight = Color(0xFFBFDBFE)
+val SkyBlueBubbleLightEnd = Color(0xFFD4E6FC)
+val SkyBlueBubbleDark = Color(0xFF1E3A5F)
+val SkyBlueBubbleDarkEnd = Color(0xFF2A4365)
+
+val LiquidCyanStart = Color(0xFF67E8F9)
+val LiquidBlueMiddle = Color(0xFF38BDF8)
+val LiquidRoyalBlueEnd = Color(0xFF2563EB)
+
+val RoseBlockBgLight = Color(0xFFFFEEF2)
+val RoseBlockBgDark = Color(0xFF2A131A)
+val RoseBlockBorderLight = Color(0xFFFECDD3)
+val RoseBlockBorderDark = Color(0xFF881337)
+val RoseBlockTextLight = Color(0xFFE11D48)
+val RoseBlockTextDark = Color(0xFFFDA4AF)
+

@@ -102,73 +102,23 @@ fun ChatsHomeScreen(
 
     Scaffold(
         topBar = {
-            // Fort Chat Top Bar matching reference design
+            // Fort Chat Top Bar matching Mobile Privacy Showcase
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface)
+                    .background(
+                        if (isDark) Color(0xEB0D1527)
+                        else Color.White.copy(alpha = 0.85f)
+                    )
                     .border(
                         0.5.dp,
                         if (isDark) Color(0xFF1E2B47) else Color(0xFFE2E8F0)
                     )
                     .statusBarsPadding()
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(62.dp)
-                        .padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        FortChatLogoBadge(size = 38.dp)
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text(
-                                text = "Fort Chat",
-                                fontSize = 17.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                letterSpacing = (-0.2).sp
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            PrivateByDefaultBadge()
-                        }
-                    }
-
-                    // Profile Circle Icon Button (min 48dp touch target)
-                    IconButton(
-                        onClick = onNavigateToYou,
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(CircleShape)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(if (isDark) Color(0xFF1E293B) else Color(0xFFF1F5F9))
-                                .border(
-                                    0.5.dp,
-                                    if (isDark) Color(0xFF334155) else Color(0xFFCBD5E1),
-                                    CircleShape
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (activeCard != null && activeCard.avatarEmoji.isNotBlank()) {
-                                Text(text = activeCard.avatarEmoji, fontSize = 16.sp)
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Outlined.Person,
-                                    contentDescription = if (isBangla) "প্রোফাইল ও এক্সেস ম্যাপ" else "Profile & Access Map",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                    }
-                }
+                com.fort.messenger.ui.components.FortChatShowcaseTopBar(
+                    onOpenPresence = { viewModel.openMoodPicker() }
+                )
             }
         },
         floatingActionButton = {
@@ -207,143 +157,47 @@ fun ChatsHomeScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
                 .padding(horizontal = 16.dp),
-            contentPadding = PaddingValues(top = 12.dp, bottom = 80.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            contentPadding = PaddingValues(top = 10.dp, bottom = 80.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Page Header: "Your chats"
+            // Page Header: "Chats" + Subtitle matching showcase
             item {
-                Text(
-                    text = if (isBangla) "আপনার চ্যাটসমূহ" else "Your chats",
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    letterSpacing = (-0.4).sp,
-                    modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
+                Column(modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)) {
+                    Text(
+                        text = if (isBangla) "চ্যাটসমূহ" else "Chats",
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isDark) com.fort.messenger.ui.theme.TextPrimaryDark else com.fort.messenger.ui.theme.ShowcaseNavyText,
+                        letterSpacing = (-0.5).sp
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = if (isBangla)
+                            "প্রিয় মানুষদের কাছে থাকার একটি শান্ত, আরও ব্যক্তিগত উপায়।"
+                        else
+                            "A calmer, more private way to stay close to the people who matter.",
+                        fontSize = 13.5.sp,
+                        color = if (isDark) com.fort.messenger.ui.theme.TextMutedDark else com.fort.messenger.ui.theme.ShowcaseNavySubtext,
+                        lineHeight = 18.sp
+                    )
+                }
+            }
+
+            // Quick Actions: 3 Horizontal Cards [Scan invite] [Create invite] [Find by Fort ID]
+            item {
+                com.fort.messenger.ui.components.FortChatShowcaseActionCardsRow(
+                    onScanInvite = { viewModel.openPassScanner() },
+                    onCreateInvite = { viewModel.openPassGenerator() },
+                    onFindByFortId = { viewModel.openSearchPeople() }
                 )
             }
 
-            // Quiet Presence Control with clear audience and expiry explanation
-            item {
-                QuietPresenceBanner(
-                    moodState = uiState.moodState,
-                    onOpenMoodPicker = { viewModel.openMoodPicker() },
-                    language = uiState.currentLanguage
-                )
-            }
-
-            // When there are no conversations at all: Hide filters, counts, and FAB. Show clean liquid-glass hero.
+            // When there are no conversations at all: Show Mobile Privacy Showcase 3D Liquid Bubbles Hero
             if (!hasConversations) {
                 item {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 18.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        // Concentric liquid rings with bubbles & shield
-                        FortChatEmptyHero(modifier = Modifier.padding(bottom = 18.dp))
-
-                        Text(
-                            text = if (isBangla) "এখনো কোনো কথোপকথন নেই" else "No conversations yet",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 20.sp,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            textAlign = TextAlign.Center
-                        )
-
-                        Spacer(modifier = Modifier.height(6.dp))
-
-                        Text(
-                            text = if (isBangla)
-                                "একটি গোপন চ্যাট শুরু করতে বিশ্বস্ত কারো সাথে যুক্ত হন।"
-                            else
-                                "Connect with someone you trust to start a private chat.",
-                            fontSize = 13.5.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                            lineHeight = 18.sp,
-                            modifier = Modifier.padding(horizontal = 24.dp)
-                        )
-
-                        Spacer(modifier = Modifier.height(24.dp))
-
-                        // Action 1: "Scan an invite" (Royal blue primary pill button, >=48dp touch target)
-                        Button(
-                            onClick = { viewModel.openPassScanner() },
-                            colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
-                            shape = RoundedCornerShape(24.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(50.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.QrCodeScanner,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                                tint = Color.White
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = if (isBangla) "ইনভাইট স্ক্যান করুন" else "Scan an invite",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color.White
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Action 2: "Create an invite" (Outlined pill button, >=48dp touch target)
-                        OutlinedButton(
-                            onClick = { viewModel.openPassGenerator() },
-                            shape = RoundedCornerShape(24.dp),
-                            border = BorderStroke(1.2.dp, if (isDark) Color(0xFF3B82F6) else RoyalBluePrimary),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(50.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.QrCode,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                                tint = if (isDark) Color(0xFF60A5FA) else RoyalBluePrimary
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = if (isBangla) "ইনভাইট তৈরি করুন" else "Create an invite",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = if (isDark) Color(0xFF60A5FA) else RoyalBluePrimary
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Action 3: "Find by Fort ID (Knock First)" (Outlined pill button, >=48dp touch target)
-                        OutlinedButton(
-                            onClick = { viewModel.openSearchPeople() },
-                            shape = RoundedCornerShape(24.dp),
-                            border = BorderStroke(1.dp, if (isDark) Color(0xFF334155) else Color(0xFFCBD5E1)),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = if (isDark) Color(0xFF94A3B8) else Color(0xFF334155)
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(50.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.PersonSearch,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = if (isBangla) "ফোর্ট আইডি দিয়ে খুঁজুন (নক ফার্স্ট)" else "Find by Fort ID (Knock First)",
-                                fontSize = 13.5.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
+                    com.fort.messenger.ui.components.FortChatShowcaseEmptyHero(
+                        modifier = Modifier.padding(vertical = 20.dp)
+                    )
                 }
             } else {
                 // Conversations exist: Show Filter Chips Bar
